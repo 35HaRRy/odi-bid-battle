@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node dist/src/server.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node tools/copy-assets.js",
+    "verify-built-assets": "node tools/verify-built-assets.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:built": "BUILD=true npm run test"
   },
   "dependencies": {
     "cors": "^2.8.5",

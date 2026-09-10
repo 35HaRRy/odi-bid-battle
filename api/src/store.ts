@@ -73,7 +73,7 @@ function resolvedImage(
 }
 
 export class PgStore {
-  private pool: Pool | null;
+  readonly pool: Pool | null;
   private q: Queryable;
   private assetStore?: Pick<BattlefieldStore, keyof BattlefieldStore>;
 

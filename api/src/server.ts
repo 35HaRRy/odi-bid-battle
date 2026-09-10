@@ -2,6 +2,8 @@ import cors from "cors";
 import express from "express";
 import multer from "multer";
 import { PgStore } from "./store.js";
+import { AssetError } from "./battlefield-domain.js";
+import { assetErrorHttp, mountBattlefieldRoutes } from "./battlefield-routes.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const DATABASE_URL =
@@ -9,6 +11,7 @@ const DATABASE_URL =
   "postgres://bidbattle:bidbattle@localhost:5433/bidbattle";
 
 function toHttp(err: unknown): { status: number; body: string } {
+  if (err instanceof AssetError) return assetErrorHttp(err);
   const msg = (err as Error).message ?? "";
   if (msg === "invalid name" || msg === "invalid image")
     return { status: 400, body: msg };
@@ -38,6 +41,7 @@ export function buildApp(store: PgStore): express.Express {
   const app = express();
   app.use(cors());
   app.use(express.json());
+  mountBattlefieldRoutes(app, store);
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -252,13 +256,17 @@ export function buildApp(store: PgStore): express.Express {
 
   app.patch("/auctions/:id", async (req, res) => {
     try {
+      const battlefieldId = req.body?.battlefieldId;
+      if (battlefieldId !== undefined && battlefieldId !== null && typeof battlefieldId !== "string") {
+        return res.status(400).json({ error: "invalid battlefieldId" });
+      }
       let rec = await store.getAuction(req.params.id);
       if (req.body?.name !== undefined)
         rec = await store.renameAuction(req.params.id, String(req.body.name));
       if (req.body?.battlefieldId !== undefined)
         rec = await store.setAuctionBattlefield(
           req.params.id,
-          req.body.battlefieldId ? String(req.body.battlefieldId) : null,
+          battlefieldId,
         );
       res.json(rec);
     } catch (err) {

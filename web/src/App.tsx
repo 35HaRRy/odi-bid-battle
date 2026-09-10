@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
+import { BattlefieldLibrary, BattlefieldPreparation } from "./battlefields";
 
-type Tab = "auctions" | "catalog" | "lists" | "draft";
+type Tab = "auctions" | "catalog" | "lists" | "draft" | "battlefields";
 
 function nameOf(
   candidates: Candidate[],
@@ -192,7 +193,15 @@ function AppHeading({
   );
 }
 
-function Steps({ lang, current }: { lang: Lang; current: number }) {
+function Steps({
+  lang,
+  current,
+  onSelect,
+}: {
+  lang: Lang;
+  current: number;
+  onSelect?: (step: number) => void;
+}) {
   const keys = ["stepBattle", "stepList", "stepTeams", "stepReview"];
   return (
     <div className="steps" role="list" aria-label={t(lang, "stepList")}>
@@ -202,8 +211,11 @@ function Steps({ lang, current }: { lang: Lang; current: number }) {
           role="listitem"
           className="step"
           aria-current={i === current ? "step" : undefined}
-          disabled={i !== current}
-          title={i !== current ? t(lang, "comingSoon") : undefined}
+          disabled={i > 1}
+          onClick={() => {
+            if (i <= 1 && onSelect) onSelect(i);
+          }}
+          title={i > 1 ? t(lang, "comingSoon") : undefined}
         >
           <span className="step-num">{i + 1}</span>
           {t(lang, k)}
@@ -839,6 +851,7 @@ function AuctionWorkspace({
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [rename, setRename] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftStep, setDraftStep] = useState<number>(0);
   const active = auctions.find((a) => a.id === activeId) ?? null;
   const draftEntryIds = active ? active.entries : [];
   const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, (found) =>
@@ -987,59 +1000,87 @@ function AuctionWorkspace({
                 </button>
               </div>
             </div>
-            <Steps lang={lang} current={1} />
-            <div className="create-row">
-              <label>
-                {t(lang, "draftName")}
-                <input
-                  aria-label={t(lang, "draftName")}
-                  value={rename}
-                  onChange={(e) => setRename(e.target.value)}
-                  placeholder={t(lang, "draftName")}
-                />
-              </label>
-              <button
-                className="secondary"
-                onClick={() => mutate(api.renameAuction(active.id, rename))}
-              >
-                {t(lang, "rename")}
-              </button>
-            </div>
-            <div className="split">
-              <CatalogPane
-                lang={lang}
-                candidates={candidates}
-                addedIds={active.entries}
-                onAdd={(cid) => mutate(api.addAuctionEntry(active.id, cid))}
-                onEdit={(cid) => setEditingId(cid)}
-                resolveName={resolveDraftName}
-              />
-              <section>
-                <div className="selected-head">
-                  <h3>{active.name || t(lang, "draft")}</h3>
-                  <span className="mini-label">
-                    {active.entries.length} {t(lang, "candidates")}
-                  </span>
-                </div>
-                <p className={`source ${active.followsSource ? "" : "copy-note"}`}>
-                  {t(lang, active.followsSource ? "sourceNote" : "copiedNote")}
-                </p>
-                <OrderedEntries
+            <Steps lang={lang} current={draftStep} onSelect={setDraftStep} />
+            {draftStep === 0 ? (
+              <div>
+                <BattlefieldPreparation
                   lang={lang}
-                  entries={active.entries}
-                  candidates={candidates}
-                  onReorder={(cid, to) =>
-                    mutate(api.reorderAuction(active.id, cid, to))
-                  }
-                  onRemove={(cid) =>
-                    mutate(api.removeAuctionEntry(active.id, cid))
-                  }
-                  onEdit={(cid) => setEditingId(cid)}
-                  emptyText={t(lang, "emptyList")}
-                  resolveName={resolveDraftName}
+                  auction={active}
+                  onAuctionChange={(updated) => {
+                    setAuctions((ls) =>
+                      ls.map((x) => (x.id === updated.id ? updated : x)),
+                    );
+                  }}
                 />
-              </section>
-            </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 34px 20px" }}>
+                  <button onClick={() => setDraftStep(1)}>
+                    {t(lang, "stepList")} &rarr;
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="create-row">
+                  <label>
+                    {t(lang, "draftName")}
+                    <input
+                      aria-label={t(lang, "draftName")}
+                      value={rename}
+                      onChange={(e) => setRename(e.target.value)}
+                      placeholder={t(lang, "draftName")}
+                    />
+                  </label>
+                  <button
+                    className="secondary"
+                    onClick={() => mutate(api.renameAuction(active.id, rename))}
+                  >
+                    {t(lang, "rename")}
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => setDraftStep(0)}
+                    style={{ marginLeft: "auto" }}
+                  >
+                    &larr; {t(lang, "stepBattle")}
+                  </button>
+                </div>
+                <div className="split">
+                  <CatalogPane
+                    lang={lang}
+                    candidates={candidates}
+                    addedIds={active.entries}
+                    onAdd={(cid) => mutate(api.addAuctionEntry(active.id, cid))}
+                    onEdit={(cid) => setEditingId(cid)}
+                    resolveName={resolveDraftName}
+                  />
+                  <section>
+                    <div className="selected-head">
+                      <h3>{active.name || t(lang, "draft")}</h3>
+                      <span className="mini-label">
+                        {active.entries.length} {t(lang, "candidates")}
+                      </span>
+                    </div>
+                    <p className={`source ${active.followsSource ? "" : "copy-note"}`}>
+                      {t(lang, active.followsSource ? "sourceNote" : "copiedNote")}
+                    </p>
+                    <OrderedEntries
+                      lang={lang}
+                      entries={active.entries}
+                      candidates={candidates}
+                      onReorder={(cid, to) =>
+                        mutate(api.reorderAuction(active.id, cid, to))
+                      }
+                      onRemove={(cid) =>
+                        mutate(api.removeAuctionEntry(active.id, cid))
+                      }
+                      onEdit={(cid) => setEditingId(cid)}
+                      emptyText={t(lang, "emptyList")}
+                      resolveName={resolveDraftName}
+                    />
+                  </section>
+                </div>
+              </>
+            )}
           </section>
         )}
         {active && editingId && (
@@ -1225,7 +1266,10 @@ export default function App() {
           >
             {t(lang, "lists")}
           </button>
-          <button disabled title={t(lang, "comingSoon")}>
+          <button
+            onClick={() => setTab("battlefields")}
+            aria-current={tab === "battlefields" ? "page" : undefined}
+          >
             {t(lang, "battlefields")}
           </button>
           <button
@@ -1252,6 +1296,8 @@ export default function App() {
               onError={setError}
               onUseList={goDraft}
             />
+          ) : tab === "battlefields" ? (
+            <BattlefieldLibrary lang={lang} />
           ) : (
             <AuctionWorkspace
               lang={lang}

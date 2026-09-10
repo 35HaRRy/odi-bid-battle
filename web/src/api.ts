@@ -40,6 +40,13 @@ export interface Auction {
   battlefieldId: string | null;
   status: string;
 }
+export interface BattlefieldSummary {
+  id: string;
+  name: string;
+  geography: string;
+  history: string;
+  archivedAt: string | null;
+}
 
 function editForm(name: string, file: File | null): FormData {
   const fd = new FormData();
@@ -51,6 +58,9 @@ function editForm(name: string, file: File | null): FormData {
 export const api = {
   base: BASE,
   imageUrl: (id: string) => `${BASE}/candidates/${id}/image`,
+  battlefieldImageUrl: (id: string) => `${BASE}/battlefields/${id}/image`,
+  auctionBackgroundUrl: (id: string, rev = 0) =>
+    `${BASE}/auctions/${id}/background${rev ? `?r=${rev}` : ""}`,
   async candidates(): Promise<Candidate[]> {
     const r = await check(await fetch(`${BASE}/candidates`));
     return r.json();
@@ -160,7 +170,10 @@ export const api = {
     const r = await check(await fetch(`${BASE}/auctions`));
     return r.json();
   },
-  async createAuction(name: string, sourceListId: string | null): Promise<Auction> {
+  async createAuction(
+    name: string,
+    sourceListId: string | null,
+  ): Promise<Auction> {
     const r = await check(
       await fetch(`${BASE}/auctions`, {
         method: "POST",
@@ -184,7 +197,10 @@ export const api = {
     );
     return r.json();
   },
-  async addAuctionEntry(auctionId: string, candidateId: string): Promise<Auction> {
+  async addAuctionEntry(
+    auctionId: string,
+    candidateId: string,
+  ): Promise<Auction> {
     const r = await check(
       await fetch(`${BASE}/auctions/${auctionId}/entries`, {
         method: "POST",
@@ -232,5 +248,80 @@ export const api = {
       ),
     );
     return r.json();
+  },
+  async battlefields(): Promise<BattlefieldSummary[]> {
+    const r = await check(await fetch(`${BASE}/battlefields`));
+    return r.json();
+  },
+  async getBattlefield(id: string): Promise<BattlefieldSummary> {
+    const r = await check(await fetch(`${BASE}/battlefields/${id}`));
+    return r.json();
+  },
+  async createBattlefield(
+    fields: { name: string; geography: string; history: string },
+    file: File,
+  ): Promise<BattlefieldSummary> {
+    const fd = new FormData();
+    fd.append("name", fields.name);
+    fd.append("geography", fields.geography);
+    fd.append("history", fields.history);
+    fd.append("image", file);
+    const r = await check(
+      await fetch(`${BASE}/battlefields`, { method: "POST", body: fd }),
+    );
+    return r.json();
+  },
+  async editBattlefield(
+    id: string,
+    fields: { name: string; geography: string; history: string },
+    file: File | null,
+  ): Promise<BattlefieldSummary> {
+    const fd = new FormData();
+    fd.append("name", fields.name);
+    fd.append("geography", fields.geography);
+    fd.append("history", fields.history);
+    if (file) fd.append("image", file);
+    const r = await check(
+      await fetch(`${BASE}/battlefields/${id}/edit`, {
+        method: "POST",
+        body: fd,
+      }),
+    );
+    return r.json();
+  },
+  async archiveBattlefield(id: string): Promise<void> {
+    await check(
+      await fetch(`${BASE}/battlefields/${id}/archive`, { method: "POST" }),
+    );
+  },
+  async setAuctionBattlefield(
+    auctionId: string,
+    battlefieldId: string | null,
+  ): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ battlefieldId }),
+      }),
+    );
+    return r.json();
+  },
+  async saveAuctionBackground(auctionId: string, file: File): Promise<void> {
+    const fd = new FormData();
+    fd.append("image", file);
+    await check(
+      await fetch(`${BASE}/auctions/${auctionId}/background`, {
+        method: "POST",
+        body: fd,
+      }),
+    );
+  },
+  async deleteAuctionBackground(auctionId: string): Promise<void> {
+    await check(
+      await fetch(`${BASE}/auctions/${auctionId}/background`, {
+        method: "DELETE",
+      }),
+    );
   },
 };
