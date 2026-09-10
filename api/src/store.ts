@@ -24,6 +24,16 @@ export interface CandidateListRecord {
   entries: string[];
 }
 
+export interface AuctionRecord {
+  id: string;
+  name: string;
+  sourceListId: string | null;
+  followsSource: boolean;
+  entries: string[];
+  battlefieldId: string | null;
+  status: string;
+}
+
 type Queryable = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
 };
@@ -287,6 +297,243 @@ export class PgStore {
       await client.query("ROLLBACK").catch(() => undefined);
     } finally {
       client.release();
+    }
+  }
+
+  async saveAuction(
+    name: string,
+    sourceListId: string | null,
+  ): Promise<AuctionRecord> {
+    if (name.length > 200) throw new Error("invalid name");
+    const id = randomUUID();
+    try {
+      await this.q.query(
+        "INSERT INTO auctions (id, name, source_list_id, follows_source) VALUES ($1,$2,$3,$4)",
+        [id, name, sourceListId, sourceListId !== null],
+      );
+      if (sourceListId) {
+        const src = await this.getList(sourceListId);
+        await this.writeAuctionEntries(id, src.entries);
+      }
+      return await this.getAuction(id);
+    } catch (err) {
+      if ((err as Error).message === "list not found") throw err;
+      throw pgError("failed to save auction", err);
+    }
+  }
+
+  async listAuctions(): Promise<AuctionRecord[]> {
+    try {
+      const r = await this.q.query(
+        "SELECT id FROM auctions ORDER BY updated_at DESC, created_at DESC",
+      );
+      const out: AuctionRecord[] = [];
+      for (const row of r.rows as unknown as { id: string }[])
+        out.push(await this.getAuction(row.id));
+      return out;
+    } catch (err) {
+      throw pgError("failed to list auctions", err);
+    }
+  }
+
+  async getAuction(id: string): Promise<AuctionRecord> {
+    try {
+      const r = await this.q.query("SELECT * FROM auctions WHERE id=$1", [id]);
+      const row = r.rows[0] as unknown as
+        | {
+            id: string;
+            name: string;
+            source_list_id: string | null;
+            follows_source: boolean;
+            battlefield_id: string | null;
+            status: string;
+          }
+        | undefined;
+      if (!row) throw new Error("auction not found");
+      let entries: string[];
+      if (row.follows_source && row.source_list_id) {
+        const e = await this.q.query(
+          "SELECT candidate_id FROM list_entries WHERE list_id=$1 ORDER BY position",
+          [row.source_list_id],
+        );
+        entries = (e.rows as unknown as { candidate_id: string }[]).map(
+          (x) => x.candidate_id,
+        );
+      } else {
+        const e = await this.q.query(
+          "SELECT candidate_id FROM auction_entries WHERE auction_id=$1 ORDER BY position",
+          [id],
+        );
+        entries = (e.rows as unknown as { candidate_id: string }[]).map(
+          (x) => x.candidate_id,
+        );
+      }
+      return {
+        id: row.id,
+        name: row.name,
+        sourceListId: row.source_list_id,
+        followsSource: row.follows_source,
+        entries,
+        battlefieldId: row.battlefield_id,
+        status: row.status,
+      };
+    } catch (err) {
+      if ((err as Error).message === "auction not found") throw err;
+      throw pgError("failed to read auction", err);
+    }
+  }
+
+  private async ensureForked(auctionId: string): Promise<void> {
+    const r = await this.q.query(
+      "SELECT follows_source, source_list_id FROM auctions WHERE id=$1",
+      [auctionId],
+    );
+    const row = r.rows[0] as unknown as
+      | { follows_source: boolean; source_list_id: string | null }
+      | undefined;
+    if (!row) throw new Error("auction not found");
+    if (!row.follows_source) return;
+    if (!row.source_list_id) return;
+    const src = await this.getList(row.source_list_id);
+    await this.writeAuctionEntries(auctionId, src.entries);
+    await this.q.query(
+      "UPDATE auctions SET follows_source=false, updated_at=now() WHERE id=$1",
+      [auctionId],
+    );
+  }
+
+  private async writeAuctionEntries(
+    auctionId: string,
+    entries: string[],
+  ): Promise<void> {
+    const pool = this.pool;
+    if (!pool || typeof (pool as Pool).connect !== "function") {
+      throw pgError("failed to write auction entries", new Error("no pool"));
+    }
+    const client = await (pool as Pool).connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM auction_entries WHERE auction_id=$1", [
+        auctionId,
+      ]);
+      for (let i = 0; i < entries.length; i++) {
+        await client.query(
+          "INSERT INTO auction_entries (auction_id, candidate_id, position) VALUES ($1,$2,$3)",
+          [auctionId, entries[i], i],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async renameAuction(id: string, name: string): Promise<AuctionRecord> {
+    if (name.length > 200) throw new Error("invalid name");
+    try {
+      await this.ensureForked(id);
+      await this.q.query(
+        "UPDATE auctions SET name=$2, updated_at=now() WHERE id=$1",
+        [id, name],
+      );
+      return await this.getAuction(id);
+    } catch (err) {
+      if ((err as Error).message === "auction not found") throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to rename auction", err);
+    }
+  }
+
+  async setAuctionBattlefield(
+    id: string,
+    battlefieldId: string | null,
+  ): Promise<AuctionRecord> {
+    try {
+      await this.q.query(
+        "UPDATE auctions SET battlefield_id=$2, updated_at=now() WHERE id=$1",
+        [id, battlefieldId],
+      );
+      return await this.getAuction(id);
+    } catch (err) {
+      throw pgError("failed to update auction", err);
+    }
+  }
+
+  async addEntryToAuction(
+    auctionId: string,
+    candidateId: string,
+  ): Promise<AuctionRecord> {
+    try {
+      await this.ensureForked(auctionId);
+      const cur = await this.getAuction(auctionId);
+      if (cur.entries.includes(candidateId))
+        throw new Error("duplicate entry");
+      await this.writeAuctionEntries(auctionId, [...cur.entries, candidateId]);
+      await this.q.query(
+        "UPDATE auctions SET updated_at=now() WHERE id=$1",
+        [auctionId],
+      );
+      return await this.getAuction(auctionId);
+    } catch (err) {
+      if (
+        (err as Error).message === "auction not found" ||
+        /duplicate/i.test((err as Error).message)
+      )
+        throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to add auction entry", err);
+    }
+  }
+
+  async removeEntryFromAuction(
+    auctionId: string,
+    candidateId: string,
+  ): Promise<AuctionRecord> {
+    try {
+      await this.ensureForked(auctionId);
+      const cur = await this.getAuction(auctionId);
+      await this.writeAuctionEntries(
+        auctionId,
+        cur.entries.filter((e) => e !== candidateId),
+      );
+      await this.q.query(
+        "UPDATE auctions SET updated_at=now() WHERE id=$1",
+        [auctionId],
+      );
+      return await this.getAuction(auctionId);
+    } catch (err) {
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to remove auction entry", err);
+    }
+  }
+
+  async reorderEntryInAuction(
+    auctionId: string,
+    candidateId: string,
+    toIndex: number,
+  ): Promise<AuctionRecord> {
+    try {
+      await this.ensureForked(auctionId);
+      const cur = await this.getAuction(auctionId);
+      const from = cur.entries.indexOf(candidateId);
+      if (from === -1) throw new Error("entry not found");
+      const clamped = Math.max(0, Math.min(toIndex, cur.entries.length - 1));
+      const next = [...cur.entries];
+      next.splice(from, 1);
+      next.splice(clamped, 0, candidateId);
+      await this.writeAuctionEntries(auctionId, next);
+      await this.q.query(
+        "UPDATE auctions SET updated_at=now() WHERE id=$1",
+        [auctionId],
+      );
+      return await this.getAuction(auctionId);
+    } catch (err) {
+      if ((err as Error).message === "entry not found") throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to reorder auction entries", err);
     }
   }
 }

@@ -13,7 +13,12 @@ function toHttp(err: unknown): { status: number; body: string } {
   if (msg === "invalid name" || msg === "invalid image")
     return { status: 400, body: msg };
   if (/duplicate/i.test(msg)) return { status: 409, body: "duplicate entry" };
-  if (msg === "candidate not found" || msg === "list not found" || msg === "entry not found")
+  if (
+    msg === "candidate not found" ||
+    msg === "list not found" ||
+    msg === "entry not found" ||
+    msg === "auction not found"
+  )
     return { status: 404, body: "not found" };
   return { status: 500, body: "persistence failed" };
 }
@@ -135,6 +140,95 @@ export function buildApp(store: PgStore): express.Express {
         Number(req.body?.toIndex ?? 0),
       );
       res.json(await store.getList(req.params.id));
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.post("/auctions", async (req, res) => {
+    try {
+      const { name = "", sourceListId = null } = req.body ?? {};
+      const rec = await store.saveAuction(
+        String(name),
+        sourceListId ? String(sourceListId) : null,
+      );
+      res.status(201).json(rec);
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.get("/auctions", async (_req, res) => {
+    try {
+      res.json(await store.listAuctions());
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.get("/auctions/:id", async (req, res) => {
+    try {
+      res.json(await store.getAuction(req.params.id));
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.patch("/auctions/:id", async (req, res) => {
+    try {
+      let rec = await store.getAuction(req.params.id);
+      if (req.body?.name !== undefined)
+        rec = await store.renameAuction(req.params.id, String(req.body.name));
+      if (req.body?.battlefieldId !== undefined)
+        rec = await store.setAuctionBattlefield(
+          req.params.id,
+          req.body.battlefieldId ? String(req.body.battlefieldId) : null,
+        );
+      res.json(rec);
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.post("/auctions/:id/entries", async (req, res) => {
+    try {
+      res.json(
+        await store.addEntryToAuction(
+          req.params.id,
+          String(req.body?.candidateId ?? ""),
+        ),
+      );
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.delete("/auctions/:id/entries/:candidateId", async (req, res) => {
+    try {
+      res.json(
+        await store.removeEntryFromAuction(req.params.id, req.params.candidateId),
+      );
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.post("/auctions/:id/reorder", async (req, res) => {
+    try {
+      res.json(
+        await store.reorderEntryInAuction(
+          req.params.id,
+          String(req.body?.candidateId ?? ""),
+          Number(req.body?.toIndex ?? 0),
+        ),
+      );
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });

@@ -53,3 +53,77 @@ export function reorderEntry(
   list.entries.splice(from, 1);
   list.entries.splice(clamped, 0, candidateId);
 }
+
+export interface AuctionDraft {
+  id: string;
+  name: string;
+  sourceListId: string | null;
+  followsSource: boolean;
+  entries: string[];
+  battlefieldId: string | null;
+  status: "draft" | "ongoing" | "completed";
+}
+
+export function createAuctionDraft(
+  name: string,
+  sourceEntries: string[],
+  sourceListId: string | null,
+): AuctionDraft {
+  if (name.length > 200) throw new Error("invalid name");
+  return {
+    id: randomUUID(),
+    name,
+    sourceListId,
+    followsSource: sourceListId !== null,
+    entries: [...sourceEntries],
+    battlefieldId: null,
+    status: "draft",
+  };
+}
+
+function forkDraft(draft: AuctionDraft): void {
+  draft.followsSource = false;
+}
+
+export function renameDraft(draft: AuctionDraft, name: string): void {
+  if (name.length > 200) throw new Error("invalid name");
+  if (draft.followsSource) forkDraft(draft);
+  draft.name = name;
+}
+
+export function syncFollowedDraft(
+  draft: AuctionDraft,
+  sourceEntries: string[],
+): void {
+  if (draft.followsSource) draft.entries = [...sourceEntries];
+}
+
+export function addEntryToDraft(
+  draft: AuctionDraft,
+  candidateId: string,
+): void {
+  if (draft.followsSource) forkDraft(draft);
+  if (draft.entries.includes(candidateId)) throw new Error("duplicate entry");
+  draft.entries.push(candidateId);
+}
+
+export function removeEntryFromDraft(
+  draft: AuctionDraft,
+  candidateId: string,
+): void {
+  if (draft.followsSource) forkDraft(draft);
+  draft.entries = draft.entries.filter((e) => e !== candidateId);
+}
+
+export function reorderEntryInDraft(
+  draft: AuctionDraft,
+  candidateId: string,
+  toIndex: number,
+): void {
+  if (draft.followsSource) forkDraft(draft);
+  const from = draft.entries.indexOf(candidateId);
+  if (from === -1) throw new Error("entry not found");
+  const clamped = Math.max(0, Math.min(toIndex, draft.entries.length - 1));
+  draft.entries.splice(from, 1);
+  draft.entries.splice(clamped, 0, candidateId);
+}

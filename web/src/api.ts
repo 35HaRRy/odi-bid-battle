@@ -31,6 +31,15 @@ export interface CandidateList {
   isDraft: boolean;
   entries: string[];
 }
+export interface Auction {
+  id: string;
+  name: string;
+  sourceListId: string | null;
+  followsSource: boolean;
+  entries: string[];
+  battlefieldId: string | null;
+  status: string;
+}
 
 export const api = {
   base: BASE,
@@ -99,6 +108,69 @@ export const api = {
   ): Promise<CandidateList> {
     const r = await check(
       await fetch(`${BASE}/lists/${listId}/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateId, toIndex }),
+      }),
+    );
+    return r.json();
+  },
+  async auctions(): Promise<Auction[]> {
+    const r = await check(await fetch(`${BASE}/auctions`));
+    return r.json();
+  },
+  async createAuction(name: string, sourceListId: string | null): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, sourceListId }),
+      }),
+    );
+    return r.json();
+  },
+  async getAuction(id: string): Promise<Auction> {
+    const r = await check(await fetch(`${BASE}/auctions/${id}`));
+    return r.json();
+  },
+  async renameAuction(id: string, name: string): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }),
+    );
+    return r.json();
+  },
+  async addAuctionEntry(auctionId: string, candidateId: string): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/entries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateId }),
+      }),
+    );
+    return r.json();
+  },
+  async removeAuctionEntry(
+    auctionId: string,
+    candidateId: string,
+  ): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/entries/${candidateId}`, {
+        method: "DELETE",
+      }),
+    );
+    return r.json();
+  },
+  async reorderAuction(
+    auctionId: string,
+    candidateId: string,
+    toIndex: number,
+  ): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/reorder`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId, toIndex }),
