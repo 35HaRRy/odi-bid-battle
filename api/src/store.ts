@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
+import { AssetError } from "./battlefield-domain.js";
+import { BattlefieldStore } from "./battlefield-store.js";
 
 export class PersistenceError extends Error {
   constructor(message: string, opts?: { cause?: unknown }) {
@@ -73,10 +75,40 @@ function resolvedImage(
 export class PgStore {
   private pool: Pool | null;
   private q: Queryable;
+  private assetStore?: Pick<BattlefieldStore, keyof BattlefieldStore>;
 
   constructor(pool: Queryable & { end?: () => Promise<void> }) {
     this.q = pool;
     this.pool = pool as Pool;
+  }
+
+  get battlefields(): Pick<BattlefieldStore, keyof BattlefieldStore> {
+    if (!this.assetStore) {
+      if (!this.pool || typeof this.pool.connect !== "function") {
+        throw pgError("failed to access battlefield storage", new Error("no pool"));
+      }
+      const assets = new BattlefieldStore(this.pool);
+      // Wrap at this boundary so the focused repository never imports PgStore.
+      const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+        try {
+          return await operation();
+        } catch (err) {
+          if (err instanceof AssetError || err instanceof PersistenceError) throw err;
+          throw pgError("failed to persist battlefield assets", err);
+        }
+      };
+      this.assetStore = {
+        create: (fields, image) => run(() => assets.create(fields, image)),
+        list: () => run(() => assets.list()),
+        get: (id) => run(() => assets.get(id)),
+        edit: (id, fields, image) => run(() => assets.edit(id, fields, image)),
+        archive: (id) => run(() => assets.archive(id)),
+        select: (auctionId, battlefieldId) => run(() => assets.select(auctionId, battlefieldId)),
+        setBackground: (auctionId, image) => run(() => assets.setBackground(auctionId, image)),
+        getBackground: (auctionId) => run(() => assets.getBackground(auctionId)),
+      };
+    }
+    return this.assetStore;
   }
 
   static async connect(url: string): Promise<PgStore> {
@@ -91,7 +123,7 @@ export class PgStore {
   }
 
   async close(): Promise<void> {
-    await this.pool?.end().catch(() => undefined);
+    await this.pool?.end?.().catch(() => undefined);
   }
 
   async saveCandidate(
@@ -653,12 +685,10 @@ export class PgStore {
     battlefieldId: string | null,
   ): Promise<AuctionRecord> {
     try {
-      await this.q.query(
-        "UPDATE auctions SET battlefield_id=$2, updated_at=now() WHERE id=$1",
-        [id, battlefieldId],
-      );
+      await this.battlefields.select(id, battlefieldId);
       return await this.getAuction(id);
     } catch (err) {
+      if (err instanceof AssetError || err instanceof PersistenceError) throw err;
       throw pgError("failed to update auction", err);
     }
   }

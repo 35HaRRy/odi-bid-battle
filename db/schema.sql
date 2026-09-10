@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TABLE IF NOT EXISTS candidates (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
@@ -22,6 +24,17 @@ CREATE TABLE IF NOT EXISTS list_entries (
   UNIQUE (list_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_entries_list ON list_entries(list_id, position);
+CREATE TABLE IF NOT EXISTS battlefields (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 200),
+  geography TEXT NOT NULL CHECK (char_length(btrim(geography)) > 0),
+  history TEXT NOT NULL CHECK (char_length(btrim(history)) > 0),
+  image BYTEA NOT NULL CHECK (octet_length(image) > 0),
+  image_mime TEXT NOT NULL,
+  image_name TEXT NOT NULL,
+  archived_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS auctions (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL CHECK (char_length(name) BETWEEN 0 AND 200),
@@ -41,3 +54,32 @@ CREATE TABLE IF NOT EXISTS auction_entries (
   UNIQUE (auction_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_auction_entries_auction ON auction_entries(auction_id, position);
+
+-- Upgrade existing databases without discarding legacy selections or image data.
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_image BYTEA;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_mime TEXT;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_name TEXT;
+DO $$
+DECLARE
+  missing_ids TEXT;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'auctions_battlefield_id_fkey'
+      AND conrelid = 'auctions'::regclass
+  ) THEN
+    SELECT string_agg(DISTINCT quote_literal(a.battlefield_id), ', ' ORDER BY quote_literal(a.battlefield_id))
+      INTO missing_ids
+      FROM auctions a
+      WHERE a.battlefield_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM battlefields b WHERE b.id = a.battlefield_id);
+    IF missing_ids IS NOT NULL THEN
+      RAISE EXCEPTION 'Cannot migrate: missing battlefield IDs: %', missing_ids;
+    END IF;
+    ALTER TABLE auctions ADD CONSTRAINT auctions_battlefield_id_fkey
+      FOREIGN KEY (battlefield_id) REFERENCES battlefields(id) ON DELETE RESTRICT;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_auctions_battlefield ON auctions(battlefield_id);
+
+COMMIT;
