@@ -1,0 +1,55 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - generic [ref=f1e3]: Etkileşimli tasarım örneği · Veriler yalnızca bu sekmede
+    - generic [ref=f1e4]: Açık artırmalar
+  - main [ref=f1e5]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e10]:
+        - strong [ref=f1e11]: ODİ BID BATTLE
+        - generic [ref=f1e12]: Orta Dünya Açık Artırma Kroniği
+      - generic [ref=f1e13]:
+        - status [ref=f1e14]: Örnek bu sekmede saklandı
+        - combobox "Language / Dil" [ref=f1e16]:
+          - option "Türkçe" [selected]
+          - option "English"
+        - button "Örneği sıfırla" [ref=f1e17] [cursor=pointer]
+    - navigation "Application / Uygulama" [ref=f1e18]:
+      - button "Açık artırmalar" [ref=f1e19] [cursor=pointer]
+      - button "Aday kataloğu" [ref=f1e20] [cursor=pointer]
+      - button "Aday listeleri" [ref=f1e21] [cursor=pointer]
+      - button "Savaş alanları" [ref=f1e22] [cursor=pointer]
+      - button "Güncel taslak" [ref=f1e23] [cursor=pointer]
+    - generic [ref=f1e24]:
+      - generic [ref=f1e25]:
+        - generic [ref=f1e26]:
+          - heading "Divanın kayıtları." [level=1] [ref=f1e27]
+          - paragraph [ref=f1e28]: Yeni bir açık artırma hazırla veya bıraktığın divana geri dön.
+        - button "Yeni açık artırma" [ref=f1e29] [cursor=pointer]
+      - searchbox "Açık artırma ara" [ref=f1e31]
+      - table [ref=f1e33]:
+        - rowgroup [ref=f1e34]:
+          - row [ref=f1e35]:
+            - columnheader "Açık artırma" [ref=f1e36]
+            - columnheader "Durum" [ref=f1e37]
+            - columnheader "Adaylar" [ref=f1e38]
+            - columnheader [ref=f1e39]
+        - rowgroup [ref=f1e40]:
+          - row [ref=f1e41]:
+            - cell "Sonbahar Divanı" [ref=f1e42]
+            - cell "Taslak" [ref=f1e43]
+            - cell "8" [ref=f1e45]
+            - cell [ref=f1e46]:
+              - generic [ref=f1e47]:
+                - button "Aç" [ref=f1e48] [cursor=pointer]
+                - button "Yeni taslak" [ref=f1e49] [cursor=pointer]
+      - generic [ref=f1e50]:
+        - generic [ref=f1e51]:
+          - heading "Önce hazırlık, sonra divan." [level=3] [ref=f1e52]
+          - paragraph [ref=f1e53]: Savaş alanını seç, adaylarını sırala, takımları hazırla. Eşit altınla başlayan iki ittifak, sırayla teklif verir.
+        - generic [ref=f1e54]:
+          - heading "Kayıtların aynı dünyada kalır." [level=3] [ref=f1e55]
+          - paragraph [ref=f1e56]: Adayları ve savaş alanlarını tekrar kullan. Başlatılmış açık artırmaların bilgileri kendi kayıtlarında korunur.
+    - status [ref=f1e57]: Connecting…
+  - generic [ref=f1e58]:
+    - generic [ref=f1e59]: Tasarıma ait örnek kayıtlar bu sekmede tutulur. Gerçek açık artırma kaydı değildir.
+    - generic [ref=f1e60]: A · Divan ile aynı parşömen ve orman dili

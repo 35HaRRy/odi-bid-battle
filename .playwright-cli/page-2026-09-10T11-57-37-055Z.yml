@@ -1,0 +1,81 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - generic [ref=f1e3]: Tıklanabilir tasarım · Örnek veriler
+    - generic [ref=f1e4]: Dört adımda hazırlık
+  - main [ref=f1e5]:
+    - generic [ref=f1e6]:
+      - generic [ref=f1e10]:
+        - strong [ref=f1e11]: ODİ BID BATTLE
+        - generic [ref=f1e12]: Orta Dünya Açık Artırma Kroniği
+      - generic [ref=f1e13]:
+        - status [ref=f1e14]: Örnek bu sekmede saklandı
+        - combobox "Language / Dil" [ref=f1e16]:
+          - option "Türkçe" [selected]
+          - option "English"
+        - button "Örneği sıfırla" [ref=f1e17] [cursor=pointer]
+    - generic [ref=f1e18]:
+      - generic [ref=f1e19]:
+        - heading "Yeni bir divan kur." [level=1] [ref=f1e20]
+        - paragraph [ref=f1e21]: Savaş alanını seç, adayları sırala ve iki ittifakı hazırla.
+      - generic [ref=f1e22]:
+        - text: Açık artırma adı
+        - textbox "Açık artırma adı" [ref=f1e23]: Sonbahar Divanı
+    - navigation "Hazırlık adımları" [ref=f1e24]:
+      - button "1 Savaş alanı" [ref=f1e25] [cursor=pointer]:
+        - generic [ref=f1e26]: "1"
+        - generic [ref=f1e27]: Savaş alanı
+      - button "2 Aday listesi" [ref=f1e28] [cursor=pointer]:
+        - generic [ref=f1e29]: "2"
+        - generic [ref=f1e30]: Aday listesi
+      - button "3 Takımlar" [ref=f1e31] [cursor=pointer]:
+        - generic [ref=f1e32]: "3"
+        - generic [ref=f1e33]: Takımlar
+      - button "4 Son kontrol" [ref=f1e34] [cursor=pointer]:
+        - generic [ref=f1e35]: "4"
+        - generic [ref=f1e36]: Son kontrol
+    - generic [ref=f1e37]:
+      - generic [ref=f1e39]:
+        - heading "Hikâyenin geçeceği yeri seç." [level=2] [ref=f1e40]
+        - paragraph [ref=f1e41]: Seçilen alan, açık artırmanın ikinci yarısında sahnenin arka planı olacak.
+      - generic [ref=f1e44]:
+        - generic [ref=f1e45]:
+          - button [pressed] [ref=f1e46] [cursor=pointer]:
+            - strong [ref=f1e47]: Batı Geçidi
+            - text: Nehir vadisi · Açık geçit
+            - emphasis [ref=f1e48]: Seçili savaş alanı
+          - button [ref=f1e49] [cursor=pointer]:
+            - strong [ref=f1e50]: Kadim Orman
+            - text: Sık ağaçlık · Eski patikalar
+          - button [ref=f1e51] [cursor=pointer]:
+            - strong [ref=f1e52]: Taşlı Vadi
+            - text: Yüksek kayalıklar · Nehir yatağı
+        - generic [ref=f1e53]:
+          - generic [ref=f1e54]:
+            - img "Batı Geçidi" [ref=f1e55]
+            - generic [ref=f1e56]: Batı Geçidi
+            - generic [ref=f1e57]: Temsili harita · Nihai savaş alanı görseli değil
+          - generic [ref=f1e58]:
+            - generic [ref=f1e59]:
+              - text: Coğrafi özellikler
+              - paragraph [ref=f1e60]: İki orman sırtı arasındaki dar geçit, nehir kıyısı ve açık düzlüklerle çevrilidir.
+            - generic [ref=f1e61]:
+              - text: Tarihi geçmiş
+              - paragraph [ref=f1e62]: Eski yolların kesiştiği bu geçit, birçok ittifakın buluşma noktası olmuştur.
+          - generic [ref=f1e63]:
+            - generic [ref=f1e64]:
+              - strong [ref=f1e65]: İlk yarının arka planı
+              - paragraph [ref=f1e66]: Varsayılan açık parşömen. İstersen kendi görselini yükle.
+            - button "Görseli değiştir" [ref=f1e67] [cursor=pointer]
+          - generic [ref=f1e68]:
+            - generic [ref=f1e69]: "Seçili savaş alanı: Batı Geçidi"
+            - button "Görseli değiştir" [ref=f1e70] [cursor=pointer]
+    - status [ref=f1e71]: Connecting…
+    - generic [ref=f1e72]:
+      - generic [ref=f1e73]:
+        - button "Geri" [disabled] [ref=f1e74]
+        - button "Taslağı sakla" [ref=f1e75] [cursor=pointer]
+      - paragraph [ref=f1e76]: Eksik bilgileri daha sonra tamamlayabilirsin.
+      - button "Sonraki adım" [ref=f1e77] [cursor=pointer]
+  - generic [ref=f1e78]:
+    - generic [ref=f1e79]: Tasarıma ait örnek kayıtlar bu sekmede tutulur. Gerçek açık artırma kaydı değildir.
+    - generic [ref=f1e80]: A · Divan ile aynı parşömen ve orman dili
