@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: bidbattle
+      POSTGRES_PASSWORD: bidbattle
+      POSTGRES_DB: bidbattle
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+volumes:
+  pgdata:

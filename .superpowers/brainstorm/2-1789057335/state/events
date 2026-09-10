@@ -1,0 +1,9 @@
+# events
+- plan approved: approach A (Vite React TS + Node API + Local PG :5433)
+- domain TDD red→green: 8 tests (dedup/reorder/draft)
+- store TDD red→green: 2 tests (PersistenceError + pg roundtrip/archive/restart)
+- api REST smoke: candidates, lists, dup 409, reorder, image bytes OK
+- web: catalog/lists minimal shell, TR default + EN, banner on 500
+- code-review: fixed draft CHECK (lists allow empty name), toHttp map (404/409),
+  Catalog/Lists shared candidates state, entry thumbnails
+- full suite: api 10 + web 2 = 12 passed; typecheck api+web clean; builds ok
