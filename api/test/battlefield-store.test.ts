@@ -256,6 +256,29 @@ describe("battlefield persistence", () => {
 });
 
 describe("background persistence", () => {
+  it("reads auction metadata without transferring background columns", async () => {
+    const draft = await store.saveAuction("Metadata", null);
+    const buffer = Buffer.alloc(5 * 1024 * 1024);
+    image.buffer.copy(buffer);
+    await assets.setBackground(draft.id, { ...image, buffer });
+    const returnedColumns: string[][] = [];
+    const metadataStore = new PgStore({
+      query: async (text, params) => {
+        const result = await pool.query(text, params);
+        returnedColumns.push(result.fields.map((field) => field.name));
+        return result;
+      },
+    });
+    expect(await metadataStore.getAuction(draft.id)).toEqual(draft);
+    expect(await metadataStore.listAuctions()).toEqual([draft]);
+    for (const columns of returnedColumns) {
+      expect(columns).not.toContain("background_image");
+      expect(columns).not.toContain("background_mime");
+      expect(columns).not.toContain("background_name");
+    }
+    expect((await assets.getBackground(draft.id))?.buffer.equals(buffer)).toBe(true);
+  });
+
   it("round-trips and resets only the target draft background without forking", async () => {
     const list = await store.saveList("Source", false);
     const draft = await store.saveAuction("Draft", list.id);

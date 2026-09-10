@@ -571,7 +571,10 @@ export class PgStore {
 
   async getAuction(id: string): Promise<AuctionRecord> {
     try {
-      const r = await this.q.query("SELECT * FROM auctions WHERE id=$1", [id]);
+      const r = await this.q.query(
+        "SELECT id, name, source_list_id, follows_source, battlefield_id, status FROM auctions WHERE id=$1",
+        [id],
+      );
       const row = r.rows[0] as unknown as
         | {
             id: string;

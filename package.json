@@ -7,6 +7,6 @@
     "typecheck": "npm run typecheck -w api && npm run typecheck -w web",
     "test": "npm run test -w api && npm run test -w web",
     "db:up": "docker compose up -d db",
-    "db:migrate": "docker compose exec -T db psql -U bidbattle -d bidbattle -f /docker-entrypoint-initdb.d/schema.sql"
+    "db:migrate": "docker compose exec -T db psql -U bidbattle -d bidbattle -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/schema.sql"
   }
 }
