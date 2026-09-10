@@ -5,6 +5,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     catalog: "Aday Kataloğu",
     lists: "Aday Listeleri",
     auctions: "Müzayedeler",
+    currentDraft: "Güncel Taslak",
     battlefields: "Savaş Alanları",
     draft: "Taslak",
     name: "Ad",
@@ -74,11 +75,29 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     selectList: "Listeyi seç",
     open: "Aç",
     added: "Listede",
+    edit: "Düzenle",
+    editCandidate: "Adayın kopyasını düzenle",
+    candidateCopy:
+      "Bu aday değiştirildiğinde yeni kayıt oluşur. Mevcut aday ve kaynak liste korunur.",
+    newCandidateDescription:
+      "Ad ve görselle yeni bir aday oluştur. Görsel kırpılmadan gösterilir.",
+    candidateName: "Aday adı",
+    candidateImage: "Görsel yükle",
+    keepImage: "Görsel boş bırakılırsa mevcut görsel kopyalanır.",
+    save: "Kaydet",
+    cancel: "Vazgeç",
+    close: "Kapat",
+    archiveTitle: "Kaydı arşivle?",
+    archiveText:
+      "Yeni seçimlerde görünmeyecek. Bu kaydı kullanan mevcut listeler ve açık artırmalar korunacak.",
+    archived: "Kayıt arşivlendi.",
+    updated: "Değişiklikler saklandı.",
   },
   en: {
     catalog: "Candidate Catalog",
     lists: "Candidate Lists",
     auctions: "Auctions",
+    currentDraft: "Current draft",
     battlefields: "Battlefields",
     draft: "Draft",
     name: "Name",
@@ -148,6 +167,23 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     selectList: "Select list",
     open: "Open",
     added: "Added",
+    edit: "Edit",
+    editCandidate: "Edit a candidate copy",
+    candidateCopy:
+      "Saving creates a new candidate record. The existing candidate and source list are preserved.",
+    newCandidateDescription:
+      "Create a candidate with a name and image. The image will not be cropped.",
+    candidateName: "Candidate name",
+    candidateImage: "Upload image",
+    keepImage: "Leave empty to reuse the copied image.",
+    save: "Save",
+    cancel: "Cancel",
+    close: "Close",
+    archiveTitle: "Archive this record?",
+    archiveText:
+      "It will no longer appear in new selections. Existing lists and auctions using it will be preserved.",
+    archived: "Record archived.",
+    updated: "Changes saved.",
   },
 };
 

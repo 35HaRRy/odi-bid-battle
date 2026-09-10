@@ -41,11 +41,35 @@ export interface Auction {
   status: string;
 }
 
+function editForm(name: string, file: File | null): FormData {
+  const fd = new FormData();
+  fd.append("name", name);
+  if (file) fd.append("image", file);
+  return fd;
+}
+
 export const api = {
   base: BASE,
   imageUrl: (id: string) => `${BASE}/candidates/${id}/image`,
   async candidates(): Promise<Candidate[]> {
     const r = await check(await fetch(`${BASE}/candidates`));
+    return r.json();
+  },
+  async getCandidate(id: string): Promise<Candidate> {
+    const r = await check(await fetch(`${BASE}/candidates/${id}`));
+    return r.json();
+  },
+  async editCatalogCandidate(
+    id: string,
+    name: string,
+    file: File | null,
+  ): Promise<Candidate> {
+    const r = await check(
+      await fetch(`${BASE}/candidates/${id}/edit`, {
+        method: "POST",
+        body: editForm(name, file),
+      }),
+    );
     return r.json();
   },
   async createCandidate(name: string, file: File): Promise<Candidate> {
@@ -115,6 +139,23 @@ export const api = {
     );
     return r.json();
   },
+  async archiveList(id: string): Promise<void> {
+    await check(await fetch(`${BASE}/lists/${id}/archive`, { method: "POST" }));
+  },
+  async editListEntry(
+    listId: string,
+    candidateId: string,
+    name: string,
+    file: File | null,
+  ): Promise<{ candidate: Candidate; list: CandidateList }> {
+    const r = await check(
+      await fetch(`${BASE}/lists/${listId}/entries/${candidateId}/edit`, {
+        method: "POST",
+        body: editForm(name, file),
+      }),
+    );
+    return r.json();
+  },
   async auctions(): Promise<Auction[]> {
     const r = await check(await fetch(`${BASE}/auctions`));
     return r.json();
@@ -175,6 +216,20 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ candidateId, toIndex }),
       }),
+    );
+    return r.json();
+  },
+  async editAuctionEntry(
+    auctionId: string,
+    candidateId: string,
+    name: string,
+    file: File | null,
+  ): Promise<{ candidate: Candidate; auction: Auction }> {
+    const r = await check(
+      await fetch(
+        `${BASE}/auctions/${auctionId}/entries/${candidateId}/edit`,
+        { method: "POST", body: editForm(name, file) },
+      ),
     );
     return r.json();
   },

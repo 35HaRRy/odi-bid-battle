@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS candidate_lists (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL CHECK (char_length(name) BETWEEN 0 AND 200),
   is_draft BOOLEAN NOT NULL DEFAULT TRUE,
+  archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS list_entries (

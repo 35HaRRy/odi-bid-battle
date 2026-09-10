@@ -10,6 +10,7 @@ describe("auction drafts i18n", () => {
       "resume",
       "fromList",
       "searchAuctions",
+      "currentDraft",
     ])
       expect(t("tr", k)).not.toBe(k);
     for (const k of [
@@ -19,6 +20,7 @@ describe("auction drafts i18n", () => {
       "resume",
       "fromList",
       "searchAuctions",
+      "currentDraft",
     ])
       expect(t("en", k)).not.toBe(k);
   });

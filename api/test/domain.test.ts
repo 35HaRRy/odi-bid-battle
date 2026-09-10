@@ -5,6 +5,8 @@ import {
   createCandidateList,
   removeEntry,
   reorderEntry,
+  replaceEntryId,
+  shouldCopyCandidateOnEdit,
 } from "../src/domain.js";
 
 describe("candidate", () => {
@@ -60,5 +62,24 @@ describe("candidate list entries", () => {
 
   it("non-draft lists require a name", () => {
     expect(() => createCandidateList("", { draft: false })).toThrow(/name/i);
+  });
+});
+
+describe("candidate identity on edit", () => {
+  it("copies a referenced candidate instead of editing in place", () => {
+    expect(shouldCopyCandidateOnEdit(true)).toBe(true);
+  });
+
+  it("edits an unreferenced catalog candidate in place", () => {
+    expect(shouldCopyCandidateOnEdit(false)).toBe(false);
+  });
+
+  it("replaces the edited entry id within one list only", () => {
+    expect(replaceEntryId(["a", "b", "c"], "b", "d")).toEqual(["a", "d", "c"]);
+  });
+
+  it("rejects replacing a missing entry or duplicating the new id", () => {
+    expect(() => replaceEntryId(["a"], "x", "y")).toThrow(/not found/i);
+    expect(() => replaceEntryId(["a", "b"], "a", "b")).toThrow(/duplicate/i);
   });
 });

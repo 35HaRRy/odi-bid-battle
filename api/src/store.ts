@@ -17,10 +17,17 @@ export interface CandidateRecord {
   archivedAt: string | null;
 }
 
+export interface CandidateImageInput {
+  buffer: Buffer;
+  mime: string;
+  name: string;
+}
+
 export interface CandidateListRecord {
   id: string;
   name: string;
   isDraft: boolean;
+  archivedAt: string | null;
   entries: string[];
 }
 
@@ -40,6 +47,27 @@ type Queryable = {
 
 function pgError(message: string, cause: unknown): PersistenceError {
   return new PersistenceError(message, { cause });
+}
+
+function cleanCandidateName(name: string): string {
+  const clean = name.trim();
+  if (!clean || clean.length > 200) throw new Error("invalid name");
+  return clean;
+}
+
+function assertValidImage(image: CandidateImageInput | null): void {
+  if (image && image.buffer.length === 0) throw new Error("invalid image");
+}
+
+function resolvedImage(
+  current: CandidateRecord,
+  image: CandidateImageInput | null,
+): { buffer: Buffer; mime: string; name: string } {
+  return {
+    buffer: image ? image.buffer : Buffer.from(current.image),
+    mime: image ? image.mime : current.imageMime,
+    name: image ? image.name : current.imageName,
+  };
 }
 
 export class PgStore {
@@ -153,7 +181,7 @@ export class PgStore {
   async listLists(): Promise<CandidateListRecord[]> {
     try {
       const r = await this.q.query(
-        "SELECT id FROM candidate_lists ORDER BY created_at",
+        "SELECT id FROM candidate_lists WHERE archived_at IS NULL ORDER BY created_at",
       );
       const out: CandidateListRecord[] = [];
       for (const row of r.rows as unknown as { id: string }[])
@@ -167,11 +195,11 @@ export class PgStore {
   async getList(id: string): Promise<CandidateListRecord> {
     try {
       const l = await this.q.query(
-        "SELECT id, name, is_draft FROM candidate_lists WHERE id=$1",
+        "SELECT id, name, is_draft, archived_at FROM candidate_lists WHERE id=$1",
         [id],
       );
       const head = l.rows[0] as unknown as
-        | { id: string; name: string; is_draft: boolean }
+        | { id: string; name: string; is_draft: boolean; archived_at: string | null }
         | undefined;
       if (!head) throw new Error("list not found");
       const e = await this.q.query(
@@ -182,6 +210,7 @@ export class PgStore {
         id: head.id,
         name: head.name,
         isDraft: head.is_draft,
+        archivedAt: head.archived_at ?? null,
         entries: (e.rows as unknown as { candidate_id: string }[]).map(
           (r) => r.candidate_id,
         ),
@@ -189,6 +218,178 @@ export class PgStore {
     } catch (err) {
       if ((err as Error).message === "list not found") throw err;
       throw pgError("failed to read list", err);
+    }
+  }
+
+  async archiveList(id: string): Promise<void> {
+    try {
+      await this.q.query(
+        "UPDATE candidate_lists SET archived_at=now() WHERE id=$1",
+        [id],
+      );
+    } catch (err) {
+      throw pgError("failed to archive list", err);
+    }
+  }
+
+  async isCandidateReferenced(id: string): Promise<boolean> {
+    try {
+      const l = await this.q.query(
+        "SELECT 1 FROM list_entries WHERE candidate_id=$1 LIMIT 1",
+        [id],
+      );
+      if (l.rows.length > 0) return true;
+      const a = await this.q.query(
+        "SELECT 1 FROM auction_entries WHERE candidate_id=$1 LIMIT 1",
+        [id],
+      );
+      return a.rows.length > 0;
+    } catch (err) {
+      throw pgError("failed to check candidate references", err);
+    }
+  }
+
+  async editCatalogCandidate(
+    id: string,
+    name: string,
+    image: CandidateImageInput | null,
+  ): Promise<CandidateRecord> {
+    const clean = cleanCandidateName(name);
+    assertValidImage(image);
+    try {
+      const current = await this.getCandidate(id);
+      const referenced = await this.isCandidateReferenced(id);
+      if (!referenced) {
+        if (image) {
+          await this.q.query(
+            "UPDATE candidates SET name=$2, image=$3, image_mime=$4, image_name=$5 WHERE id=$1",
+            [id, clean, image.buffer, image.mime, image.name],
+          );
+        } else {
+          await this.q.query("UPDATE candidates SET name=$2 WHERE id=$1", [
+            id,
+            clean,
+          ]);
+        }
+        return await this.getCandidate(id);
+      }
+      const nextId = randomUUID();
+      const img = resolvedImage(current, image);
+      await this.q.query(
+        "INSERT INTO candidates (id, name, image, image_mime, image_name) VALUES ($1,$2,$3,$4,$5)",
+        [nextId, clean, img.buffer, img.mime, img.name],
+      );
+      await this.q.query(
+        "UPDATE candidates SET archived_at=now() WHERE id=$1",
+        [id],
+      );
+      return (await this.getCandidate(nextId)) as CandidateRecord;
+    } catch (err) {
+      if (
+        (err as Error).message === "candidate not found" ||
+        /invalid (name|image)/i.test((err as Error).message)
+      )
+        throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to edit candidate", err);
+    }
+  }
+
+  async editListEntryCandidate(
+    listId: string,
+    oldCandidateId: string,
+    name: string,
+    image: CandidateImageInput | null,
+  ): Promise<CandidateRecord> {
+    const clean = cleanCandidateName(name);
+    assertValidImage(image);
+    try {
+      const list = await this.getList(listId);
+      if (!list.entries.includes(oldCandidateId))
+        throw new Error("entry not found");
+      const current = await this.getCandidate(oldCandidateId);
+      const nextId = randomUUID();
+      const img = resolvedImage(current, image);
+      await this.q.query(
+        "INSERT INTO candidates (id, name, image, image_mime, image_name) VALUES ($1,$2,$3,$4,$5)",
+        [nextId, clean, img.buffer, img.mime, img.name],
+      );
+      const pos = await this.q.query(
+        "SELECT position FROM list_entries WHERE list_id=$1 AND candidate_id=$2",
+        [listId, oldCandidateId],
+      );
+      const position = (pos.rows[0] as unknown as { position: number }).position;
+      await this.q.query(
+        "DELETE FROM list_entries WHERE list_id=$1 AND candidate_id=$2",
+        [listId, oldCandidateId],
+      );
+      await this.q.query(
+        "INSERT INTO list_entries (list_id, candidate_id, position) VALUES ($1,$2,$3)",
+        [listId, nextId, position],
+      );
+      return (await this.getCandidate(nextId)) as CandidateRecord;
+    } catch (err) {
+      if (
+        (err as Error).message === "entry not found" ||
+        (err as Error).message === "candidate not found" ||
+        (err as Error).message === "list not found" ||
+        /invalid (name|image)/i.test((err as Error).message)
+      )
+        throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to edit list candidate", err);
+    }
+  }
+
+  async editDraftEntryCandidate(
+    auctionId: string,
+    oldCandidateId: string,
+    name: string,
+    image: CandidateImageInput | null,
+  ): Promise<CandidateRecord> {
+    const clean = cleanCandidateName(name);
+    assertValidImage(image);
+    try {
+      await this.ensureForked(auctionId);
+      const cur = await this.getAuction(auctionId);
+      if (!cur.entries.includes(oldCandidateId))
+        throw new Error("entry not found");
+      const current = await this.getCandidate(oldCandidateId);
+      const nextId = randomUUID();
+      const img = resolvedImage(current, image);
+      await this.q.query(
+        "INSERT INTO candidates (id, name, image, image_mime, image_name) VALUES ($1,$2,$3,$4,$5)",
+        [nextId, clean, img.buffer, img.mime, img.name],
+      );
+      const pos = await this.q.query(
+        "SELECT position FROM auction_entries WHERE auction_id=$1 AND candidate_id=$2",
+        [auctionId, oldCandidateId],
+      );
+      const position = (pos.rows[0] as unknown as { position: number })
+        .position;
+      await this.q.query(
+        "DELETE FROM auction_entries WHERE auction_id=$1 AND candidate_id=$2",
+        [auctionId, oldCandidateId],
+      );
+      await this.q.query(
+        "INSERT INTO auction_entries (auction_id, candidate_id, position) VALUES ($1,$2,$3)",
+        [auctionId, nextId, position],
+      );
+      await this.q.query(
+        "UPDATE auctions SET updated_at=now() WHERE id=$1",
+        [auctionId],
+      );
+      return (await this.getCandidate(nextId)) as CandidateRecord;
+    } catch (err) {
+      if (
+        (err as Error).message === "entry not found" ||
+        (err as Error).message === "candidate not found" ||
+        (err as Error).message === "auction not found" ||
+        /invalid (name|image)/i.test((err as Error).message)
+      )
+        throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to edit draft candidate", err);
     }
   }
 

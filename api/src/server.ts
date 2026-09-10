@@ -27,6 +27,13 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
+function toImageInput(
+  file: Express.Multer.File | undefined,
+): { buffer: Buffer; mime: string; name: string } | null {
+  if (!file) return null;
+  return { buffer: file.buffer, mime: file.mimetype, name: file.originalname };
+}
+
 export function buildApp(store: PgStore): express.Express {
   const app = express();
   app.use(cors());
@@ -62,6 +69,20 @@ export function buildApp(store: PgStore): express.Express {
     }
   });
 
+  app.get("/candidates/:id", async (req, res) => {
+    try {
+      const rec = await store.getCandidate(req.params.id);
+      res.json({
+        id: rec.id,
+        name: rec.name,
+        archived: rec.archivedAt !== null,
+      });
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
   app.get("/candidates/:id/image", async (req, res) => {
     try {
       const rec = await store.getCandidate(req.params.id);
@@ -82,6 +103,26 @@ export function buildApp(store: PgStore): express.Express {
       return res.status(h.status).json({ error: h.body });
     }
   });
+
+  app.post(
+    "/candidates/:id/edit",
+    upload.single("image"),
+    async (req, res) => {
+      try {
+        const name = String(req.body?.name ?? "");
+        const file = req.file;
+        const rec = await store.editCatalogCandidate(
+          req.params.id,
+          name,
+          toImageInput(file),
+        );
+        res.json({ id: rec.id, name: rec.name });
+      } catch (err) {
+        const h = toHttp(err);
+        return res.status(h.status).json({ error: h.body });
+      }
+    },
+  );
 
   app.post("/lists", async (req, res) => {
     try {
@@ -145,6 +186,37 @@ export function buildApp(store: PgStore): express.Express {
       return res.status(h.status).json({ error: h.body });
     }
   });
+
+  app.post("/lists/:id/archive", async (req, res) => {
+    try {
+      await store.archiveList(req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.post(
+    "/lists/:id/entries/:candidateId/edit",
+    upload.single("image"),
+    async (req, res) => {
+      try {
+        const name = String(req.body?.name ?? "");
+        const file = req.file;
+        const rec = await store.editListEntryCandidate(
+          req.params.id,
+          req.params.candidateId,
+          name,
+          toImageInput(file),
+        );
+        res.json({ candidate: { id: rec.id, name: rec.name }, list: await store.getList(req.params.id) });
+      } catch (err) {
+        const h = toHttp(err);
+        return res.status(h.status).json({ error: h.body });
+      }
+    },
+  );
 
   app.post("/auctions", async (req, res) => {
     try {
@@ -234,6 +306,30 @@ export function buildApp(store: PgStore): express.Express {
       return res.status(h.status).json({ error: h.body });
     }
   });
+
+  app.post(
+    "/auctions/:id/entries/:candidateId/edit",
+    upload.single("image"),
+    async (req, res) => {
+      try {
+        const name = String(req.body?.name ?? "");
+        const file = req.file;
+        const rec = await store.editDraftEntryCandidate(
+          req.params.id,
+          req.params.candidateId,
+          name,
+          toImageInput(file),
+        );
+        res.json({
+          candidate: { id: rec.id, name: rec.name },
+          auction: await store.getAuction(req.params.id),
+        });
+      } catch (err) {
+        const h = toHttp(err);
+        return res.status(h.status).json({ error: h.body });
+      }
+    },
+  );
 
   return app;
 }

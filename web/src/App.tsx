@@ -2,10 +2,52 @@ import { useEffect, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
 
-type Tab = "auctions" | "catalog" | "lists";
+type Tab = "auctions" | "catalog" | "lists" | "draft";
 
-function nameOf(candidates: Candidate[], id: string): string {
-  return candidates.find((c) => c.id === id)?.name ?? id;
+function nameOf(
+  candidates: Candidate[],
+  id: string,
+  extra?: Record<string, string>,
+): string {
+  return (
+    candidates.find((c) => c.id === id)?.name ?? extra?.[id] ?? id
+  );
+}
+
+function useMissingCandidateNames(
+  candidates: Candidate[],
+  ids: string[],
+  onResolved: (c: Candidate[]) => void,
+) {
+  const [extra, setExtra] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const known = new Set(candidates.map((c) => c.id));
+    const missing = [...new Set(ids)].filter((id) => !known.has(id) && !extra[id]);
+    if (missing.length === 0) return;
+    let live = true;
+    (async () => {
+      const found: Candidate[] = [];
+      for (const id of missing.slice(0, 20)) {
+        try {
+          found.push(await api.getCandidate(id));
+        } catch {
+          // keep raw id fallback; existing reference stays visible
+        }
+      }
+      if (!live || found.length === 0) return;
+      setExtra((prev) => {
+        const next = { ...prev };
+        for (const c of found) next[c.id] = c.name;
+        return next;
+      });
+      onResolved(found);
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids.join("|"), candidates.length]);
+  return extra;
 }
 
 function TreeMark() {
@@ -21,6 +63,112 @@ function Status({ msg }: { msg: string | null }) {
     <div className={msg ? "status error" : "status"} role="alert">
       {msg ?? ""}
     </div>
+  );
+}
+
+function CandidateEditDialog({
+  lang,
+  title,
+  description,
+  initialName,
+  previewUrl,
+  onClose,
+  onSave,
+}: {
+  lang: Lang;
+  title: string;
+  description: string;
+  initialName: string;
+  previewUrl: string;
+  onClose: () => void;
+  onSave: (name: string, file: File | null) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [file, setFile] = useState<File | null>(null);
+  return (
+    <dialog open aria-labelledby="editor-title" onClose={onClose}>
+      <form
+        method="dialog"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) onSave(name, file);
+        }}
+      >
+        <h2 id="editor-title">{title}</h2>
+        <p className="description">{description}</p>
+        <div className="dialog-fields">
+          <label>
+            <span>{t(lang, "candidateName")}</span>
+            <input
+              aria-label={t(lang, "candidateName")}
+              value={name}
+              maxLength={200}
+              required
+              autoFocus
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>{t(lang, "candidateImage")}</span>
+            <input
+              aria-label={t(lang, "candidateImage")}
+              type="file"
+              accept="image/*"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          <div className="dialog-preview">
+            <img src={previewUrl} alt="" />
+          </div>
+          <p className="description">{t(lang, "keepImage")}</p>
+        </div>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            {t(lang, "cancel")}
+          </button>
+          <button type="submit" className="primary">
+            {t(lang, "save")}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
+function ConfirmDialog({
+  lang,
+  title,
+  body,
+  confirmLabel,
+  danger,
+  onCancel,
+  onConfirm,
+}: {
+  lang: Lang;
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <dialog open aria-labelledby="app-dialog-title" onClose={onCancel}>
+      <h2 id="app-dialog-title">{title}</h2>
+      <p>{body}</p>
+      <div className="dialog-actions">
+        <button type="button" className="secondary" onClick={onCancel} autoFocus>
+          {t(lang, "cancel")}
+        </button>
+        <button
+          type="button"
+          className={danger ? "danger" : "primary"}
+          onClick={onConfirm}
+        >
+          {confirmLabel}
+        </button>
+      </div>
+    </dialog>
   );
 }
 
@@ -70,11 +218,15 @@ function CatalogPane({
   candidates,
   addedIds,
   onAdd,
+  onEdit,
+  resolveName,
 }: {
   lang: Lang;
   candidates: Candidate[];
   addedIds: string[];
   onAdd: (id: string) => void;
+  onEdit?: (id: string) => void;
+  resolveName?: (id: string) => string;
 }) {
   const [search, setSearch] = useState("");
   const q = search.toLocaleLowerCase(lang);
@@ -105,7 +257,7 @@ function CatalogPane({
               <div className="candidate-image">
                 <img src={api.imageUrl(c.id)} alt={c.name} />
               </div>
-              <h4>{c.name}</h4>
+              <h4>{resolveName ? resolveName(c.id) : c.name}</h4>
               <div className="candidate-controls">
                 <button
                   className="secondary small-btn"
@@ -114,6 +266,15 @@ function CatalogPane({
                 >
                   {addedIds.includes(c.id) ? t(lang, "added") : t(lang, "add")}
                 </button>
+                {onEdit && (
+                  <button
+                    className="quiet"
+                    aria-label={`${c.name}: ${t(lang, "edit")}`}
+                    onClick={() => onEdit(c.id)}
+                  >
+                    {t(lang, "edit")}
+                  </button>
+                )}
               </div>
             </article>
           ))}
@@ -134,26 +295,41 @@ function OrderedEntries({
   candidates,
   onReorder,
   onRemove,
+  onEdit,
   emptyText,
+  resolveName,
 }: {
   lang: Lang;
   entries: string[];
   candidates: Candidate[];
   onReorder: (id: string, to: number) => void;
   onRemove: (id: string) => void;
+  onEdit?: (id: string) => void;
   emptyText: string;
+  resolveName?: (id: string) => string;
 }) {
+  const label = (cid: string) =>
+    resolveName ? resolveName(cid) : nameOf(candidates, cid);
   return (
     <ol className="ordered-list" aria-label={t(lang, "entries")} tabIndex={0}>
       {entries.map((cid, idx) => (
         <li className="ordered-item" key={cid}>
           <span className="order-number">{idx + 1}</span>
           <img src={api.imageUrl(cid)} alt="" />
-          <span className="ordered-name">{nameOf(candidates, cid)}</span>
+          <span className="ordered-name">{label(cid)}</span>
           <div className="ordered-actions">
+            {onEdit && (
+              <button
+                className="icon-button"
+                aria-label={`${label(cid)}: ${t(lang, "edit")}`}
+                onClick={() => onEdit(cid)}
+              >
+                ✎
+              </button>
+            )}
             <button
               className="icon-button"
-              aria-label={`${nameOf(candidates, cid)}: ${t(lang, "up")}`}
+              aria-label={`${label(cid)}: ${t(lang, "up")}`}
               disabled={idx === 0}
               onClick={() => onReorder(cid, idx - 1)}
             >
@@ -161,7 +337,7 @@ function OrderedEntries({
             </button>
             <button
               className="icon-button"
-              aria-label={`${nameOf(candidates, cid)}: ${t(lang, "down")}`}
+              aria-label={`${label(cid)}: ${t(lang, "down")}`}
               disabled={idx === entries.length - 1}
               onClick={() => onReorder(cid, idx + 1)}
             >
@@ -169,7 +345,7 @@ function OrderedEntries({
             </button>
             <button
               className="icon-button"
-              aria-label={`${nameOf(candidates, cid)}: ${t(lang, "remove")}`}
+              aria-label={`${label(cid)}: ${t(lang, "remove")}`}
               onClick={() => onRemove(cid)}
             >
               ✕
@@ -196,10 +372,13 @@ function Catalog({
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [search, setSearch] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   const q = search.toLocaleLowerCase(lang);
   const shown = items.filter((c) =>
     c.name.toLocaleLowerCase(lang).includes(q),
   );
+  const editing = editingId ? items.find((c) => c.id === editingId) ?? null : null;
 
   async function create() {
     if (!name.trim() || !file) return;
@@ -215,11 +394,37 @@ function Catalog({
   }
 
   async function archive(id: string) {
+    setConfirmId(id);
+  }
+
+  async function confirmArchive() {
+    if (!confirmId) return;
+    const id = confirmId;
+    setConfirmId(null);
     try {
       await api.archiveCandidate(id);
       onItems(items.filter((c) => c.id !== id));
+      onError(null);
     } catch {
       onError(t(lang, "persistFail"));
+    }
+  }
+
+  async function saveEdit(name: string, file: File | null) {
+    if (!editing) return;
+    try {
+      const updated = await api.editCatalogCandidate(editing.id, name, file);
+      if (updated.id === editing.id) {
+        onItems(items.map((c) => (c.id === updated.id ? updated : c)));
+      } else {
+        onItems([...items.filter((c) => c.id !== editing.id), updated]);
+      }
+      setEditingId(null);
+      onError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        onError(t(lang, "duplicate"));
+      else onError(t(lang, "persistFail"));
     }
   }
 
@@ -269,6 +474,13 @@ function Catalog({
             </div>
             <h4>{c.name}</h4>
             <div className="candidate-controls">
+              <button
+                className="secondary small-btn"
+                aria-label={`${c.name}: ${t(lang, "edit")}`}
+                onClick={() => setEditingId(c.id)}
+              >
+                {t(lang, "edit")}
+              </button>
               <button className="quiet" onClick={() => archive(c.id)}>
                 {t(lang, "archive")}
               </button>
@@ -277,6 +489,28 @@ function Catalog({
         ))}
       </div>
       {shown.length === 0 && <p className="empty">{t(lang, "noResults")}</p>}
+      {editing && (
+        <CandidateEditDialog
+          lang={lang}
+          title={t(lang, "editCandidate")}
+          description={t(lang, "candidateCopy")}
+          initialName={editing.name}
+          previewUrl={api.imageUrl(editing.id)}
+          onClose={() => setEditingId(null)}
+          onSave={saveEdit}
+        />
+      )}
+      {confirmId && (
+        <ConfirmDialog
+          lang={lang}
+          title={t(lang, "archiveTitle")}
+          body={t(lang, "archiveText")}
+          confirmLabel={t(lang, "archive")}
+          danger
+          onCancel={() => setConfirmId(null)}
+          onConfirm={confirmArchive}
+        />
+      )}
     </section>
   );
 }
@@ -299,7 +533,18 @@ function Lists({
   const [name, setName] = useState("");
   const [newName, setNewName] = useState("");
   const [newFile, setNewFile] = useState<File | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingScope, setEditingScope] = useState<"entry" | "catalog">("entry");
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const active = lists.find((l) => l.id === activeId) ?? null;
+  const allEntryIds = lists.flatMap((l) => l.entries);
+  const extraNames = useMissingCandidateNames(candidates, allEntryIds, (found) =>
+    onCandidates([...candidates, ...found.filter((c) => !candidates.some((x) => x.id === c.id))]));
+  const resolveName = (id: string) => nameOf(candidates, id, extraNames);
+  const editingCandidate =
+    editingId ? [...candidates].find((c) => c.id === editingId) : null;
+  const editingName =
+    editingCandidate?.name ?? (editingId ? extraNames[editingId] : undefined) ?? "";
 
   useEffect(() => {
     api
@@ -347,6 +592,65 @@ function Lists({
     }
   }
 
+  async function confirmArchiveList() {
+    if (!confirmArchiveId) return;
+    const id = confirmArchiveId;
+    setConfirmArchiveId(null);
+    try {
+      await api.archiveList(id);
+      setLists((ls) => ls.filter((l) => l.id !== id));
+      setActiveId((a) => (a === id ? null : a));
+      onError(null);
+    } catch {
+      onError(t(lang, "persistFail"));
+    }
+  }
+
+  async function saveEntryEdit(name: string, file: File | null) {
+    if (!active || !editingId) return;
+    try {
+      const { candidate, list } = await api.editListEntry(
+        active.id,
+        editingId,
+        name,
+        file,
+      );
+      onCandidates(
+        candidates.some((c) => c.id === candidate.id)
+          ? candidates.map((c) => (c.id === candidate.id ? candidate : c))
+          : [...candidates, candidate],
+      );
+      setLists((ls) => ls.map((l) => (l.id === list.id ? list : l)));
+      setEditingId(null);
+      onError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        onError(t(lang, "duplicate"));
+      else onError(t(lang, "persistFail"));
+    }
+  }
+
+  async function saveCatalogEdit(name: string, file: File | null) {
+    if (!editingId) return;
+    try {
+      const updated = await api.editCatalogCandidate(editingId, name, file);
+      if (updated.id === editingId) {
+        onCandidates(candidates.map((c) => (c.id === updated.id ? updated : c)));
+      } else {
+        onCandidates([
+          ...candidates.filter((c) => c.id !== editingId),
+          updated,
+        ]);
+      }
+      setEditingId(null);
+      onError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        onError(t(lang, "duplicate"));
+      else onError(t(lang, "persistFail"));
+    }
+  }
+
   const valid =
     !!active && active.entries.length >= 4 && active.entries.length % 2 === 0;
 
@@ -385,8 +689,8 @@ function Lists({
                 <img
                   key={cid}
                   src={api.imageUrl(cid)}
-                  alt={nameOf(candidates, cid)}
-                  title={nameOf(candidates, cid)}
+                  alt={resolveName(cid)}
+                  title={resolveName(cid)}
                 />
               ))}
             </div>
@@ -401,6 +705,9 @@ function Lists({
               <button className="quiet" onClick={() => onUseList(l.id)}>
                 {t(lang, "useList")}
               </button>
+              <button className="quiet" onClick={() => setConfirmArchiveId(l.id)}>
+                {t(lang, "archive")}
+              </button>
             </div>
           </section>
         ))}
@@ -413,6 +720,11 @@ function Lists({
             candidates={candidates}
             addedIds={active.entries}
             onAdd={(cid) => mutate(api.addEntry(active.id, cid))}
+            onEdit={(cid) => {
+              setEditingId(cid);
+              setEditingScope("catalog");
+            }}
+            resolveName={resolveName}
           />
           <section>
             <div className="selected-head">
@@ -451,13 +763,40 @@ function Lists({
               candidates={candidates}
               onReorder={(cid, to) => mutate(api.reorder(active.id, cid, to))}
               onRemove={(cid) => mutate(api.removeEntry(active.id, cid))}
+              onEdit={(cid) => {
+                setEditingId(cid);
+                setEditingScope("entry");
+              }}
               emptyText={t(lang, "emptyList")}
+              resolveName={resolveName}
             />
             <p className={`validation-note ${valid ? "" : "error"}`}>
               {t(lang, valid ? "validList" : "invalidList")}
             </p>
           </section>
         </div>
+      )}
+      {editingId && (
+        <CandidateEditDialog
+          lang={lang}
+          title={t(lang, "editCandidate")}
+          description={t(lang, "candidateCopy")}
+          initialName={editingName}
+          previewUrl={api.imageUrl(editingId)}
+          onClose={() => setEditingId(null)}
+          onSave={editingScope === "entry" ? saveEntryEdit : saveCatalogEdit}
+        />
+      )}
+      {confirmArchiveId && (
+        <ConfirmDialog
+          lang={lang}
+          title={t(lang, "archiveTitle")}
+          body={t(lang, "archiveText")}
+          confirmLabel={t(lang, "archive")}
+          danger
+          onCancel={() => setConfirmArchiveId(null)}
+          onConfirm={confirmArchiveList}
+        />
       )}
     </section>
   );
@@ -469,18 +808,26 @@ function stateKey(status: string): string {
   return "draftState";
 }
 
-function Auctions({
+function AuctionWorkspace({
   lang,
   candidates,
   onError,
   presetSource,
   onPresetUsed,
+  view,
+  onOpenDraft,
+  onBackToAuctions,
+  onCandidates,
 }: {
   lang: Lang;
   candidates: Candidate[];
   onError: (m: string | null) => void;
   presetSource: string | null;
   onPresetUsed: () => void;
+  view: "auctions" | "draft";
+  onOpenDraft: () => void;
+  onBackToAuctions: () => void;
+  onCandidates: (c: Candidate[]) => void;
 }) {
   const [auctions, setAuctions] = useState<Auction[]>([]);
   const [activeId, setActiveId] = useState<string | null>(() =>
@@ -491,7 +838,16 @@ function Auctions({
   const [sourceId, setSourceId] = useState("");
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [rename, setRename] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const active = auctions.find((a) => a.id === activeId) ?? null;
+  const draftEntryIds = active ? active.entries : [];
+  const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, (found) =>
+    onCandidates([...candidates, ...found.filter((c) => !candidates.some((x) => x.id === c.id))]));
+  const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
+  const editingDraftName =
+    (editingId ? candidates.find((c) => c.id === editingId)?.name : undefined) ??
+    (editingId ? draftExtra[editingId] : undefined) ??
+    "";
 
   useEffect(() => {
     api
@@ -541,6 +897,7 @@ function Auctions({
       localStorage.setItem("obb-selected-auction", a.id);
       setNewName("");
       onError(null);
+      onOpenDraft();
     } catch {
       onError(t(lang, "persistFail"));
     }
@@ -549,6 +906,7 @@ function Auctions({
   function open(id: string) {
     setActiveId(id);
     localStorage.setItem("obb-selected-auction", id);
+    onOpenDraft();
   }
 
   async function mutate(p: Promise<Auction>) {
@@ -563,9 +921,141 @@ function Auctions({
     }
   }
 
+  async function saveDraftEntryEdit(name: string, file: File | null) {
+    if (!active || !editingId) return;
+    try {
+      if (active.entries.includes(editingId)) {
+        const { candidate, auction } = await api.editAuctionEntry(
+          active.id,
+          editingId,
+          name,
+          file,
+        );
+        onCandidates(
+          candidates.some((c) => c.id === candidate.id)
+            ? candidates.map((c) => (c.id === candidate.id ? candidate : c))
+            : [...candidates, candidate],
+        );
+        setAuctions((ls) => ls.map((x) => (x.id === auction.id ? auction : x)));
+      } else {
+        const updated = await api.editCatalogCandidate(editingId, name, file);
+        onCandidates(
+          updated.id === editingId
+            ? candidates.map((c) => (c.id === updated.id ? updated : c))
+            : [
+                ...candidates.filter((c) => c.id !== editingId),
+                updated,
+              ],
+        );
+      }
+      setEditingId(null);
+      onError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        onError(t(lang, "duplicate"));
+      else onError(t(lang, "persistFail"));
+    }
+  }
+
   const visible = auctions.filter((a) =>
     a.name.toLowerCase().includes(search.toLowerCase()),
   );
+
+  if (view === "draft") {
+    return (
+      <section className="route-home">
+        <AppHeading title={t(lang, "currentDraft")} intro={t(lang, "homeIntro")} />
+        {!active ? (
+          <>
+            <p className="empty">{t(lang, "noAuctions")}</p>
+            <button className="secondary" onClick={onBackToAuctions}>
+              {t(lang, "auctions")}
+            </button>
+          </>
+        ) : (
+          <section aria-label={active.name || t(lang, "draft")}>
+            <div className="section-title">
+              <div>
+                <h2>{active.name || t(lang, "draft")}</h2>
+                <p className="description">
+                  {active.entries.length} {t(lang, "candidates")}
+                </p>
+              </div>
+              <div className="header-tools">
+                <button className="quiet" onClick={onBackToAuctions}>
+                  {t(lang, "auctions")}
+                </button>
+              </div>
+            </div>
+            <Steps lang={lang} current={1} />
+            <div className="create-row">
+              <label>
+                {t(lang, "draftName")}
+                <input
+                  aria-label={t(lang, "draftName")}
+                  value={rename}
+                  onChange={(e) => setRename(e.target.value)}
+                  placeholder={t(lang, "draftName")}
+                />
+              </label>
+              <button
+                className="secondary"
+                onClick={() => mutate(api.renameAuction(active.id, rename))}
+              >
+                {t(lang, "rename")}
+              </button>
+            </div>
+            <div className="split">
+              <CatalogPane
+                lang={lang}
+                candidates={candidates}
+                addedIds={active.entries}
+                onAdd={(cid) => mutate(api.addAuctionEntry(active.id, cid))}
+                onEdit={(cid) => setEditingId(cid)}
+                resolveName={resolveDraftName}
+              />
+              <section>
+                <div className="selected-head">
+                  <h3>{active.name || t(lang, "draft")}</h3>
+                  <span className="mini-label">
+                    {active.entries.length} {t(lang, "candidates")}
+                  </span>
+                </div>
+                <p className={`source ${active.followsSource ? "" : "copy-note"}`}>
+                  {t(lang, active.followsSource ? "sourceNote" : "copiedNote")}
+                </p>
+                <OrderedEntries
+                  lang={lang}
+                  entries={active.entries}
+                  candidates={candidates}
+                  onReorder={(cid, to) =>
+                    mutate(api.reorderAuction(active.id, cid, to))
+                  }
+                  onRemove={(cid) =>
+                    mutate(api.removeAuctionEntry(active.id, cid))
+                  }
+                  onEdit={(cid) => setEditingId(cid)}
+                  emptyText={t(lang, "emptyList")}
+                  resolveName={resolveDraftName}
+                />
+              </section>
+            </div>
+          </section>
+        )}
+        {active && editingId && (
+          <CandidateEditDialog
+            lang={lang}
+            title={t(lang, "editCandidate")}
+            description={t(lang, "candidateCopy")}
+            initialName={editingDraftName}
+            previewUrl={api.imageUrl(editingId)}
+            onClose={() => setEditingId(null)}
+            onSave={saveDraftEntryEdit}
+          />
+        )}
+      </section>
+    );
+  }
 
   return (
     <section className="route-home">
@@ -658,67 +1148,6 @@ function Auctions({
           <p>{t(lang, "homeLibrary")}</p>
         </section>
       </div>
-      {active && (
-        <section aria-label={active.name || t(lang, "draft")}>
-          <div className="section-title">
-            <div>
-              <h2>{active.name || t(lang, "draft")}</h2>
-              <p className="description">
-                {active.entries.length} {t(lang, "candidates")}
-              </p>
-            </div>
-          </div>
-          <Steps lang={lang} current={1} />
-          <div className="create-row">
-            <label>
-              {t(lang, "draftName")}
-              <input
-                aria-label={t(lang, "draftName")}
-                value={rename}
-                onChange={(e) => setRename(e.target.value)}
-                placeholder={t(lang, "draftName")}
-              />
-            </label>
-            <button
-              className="secondary"
-              onClick={() => mutate(api.renameAuction(active.id, rename))}
-            >
-              {t(lang, "rename")}
-            </button>
-          </div>
-          <div className="split">
-            <CatalogPane
-              lang={lang}
-              candidates={candidates}
-              addedIds={active.entries}
-              onAdd={(cid) => mutate(api.addAuctionEntry(active.id, cid))}
-            />
-            <section>
-              <div className="selected-head">
-                <h3>{active.name || t(lang, "draft")}</h3>
-                <span className="mini-label">
-                  {active.entries.length} {t(lang, "candidates")}
-                </span>
-              </div>
-              <p className={`source ${active.followsSource ? "" : "copy-note"}`}>
-                {t(lang, active.followsSource ? "sourceNote" : "copiedNote")}
-              </p>
-              <OrderedEntries
-                lang={lang}
-                entries={active.entries}
-                candidates={candidates}
-                onReorder={(cid, to) =>
-                  mutate(api.reorderAuction(active.id, cid, to))
-                }
-                onRemove={(cid) =>
-                  mutate(api.removeAuctionEntry(active.id, cid))
-                }
-                emptyText={t(lang, "emptyList")}
-              />
-            </section>
-          </div>
-        </section>
-      )}
     </section>
   );
 }
@@ -745,7 +1174,7 @@ export default function App() {
 
   function goDraft(sourceId: string) {
     setPresetSource(sourceId);
-    setTab("auctions");
+    setTab("draft");
   }
 
   return (
@@ -799,6 +1228,12 @@ export default function App() {
           <button disabled title={t(lang, "comingSoon")}>
             {t(lang, "battlefields")}
           </button>
+          <button
+            onClick={() => setTab("draft")}
+            aria-current={tab === "draft" ? "page" : undefined}
+          >
+            {t(lang, "currentDraft")}
+          </button>
         </nav>
         <Status msg={error} />
         <main className="content">
@@ -818,12 +1253,16 @@ export default function App() {
               onUseList={goDraft}
             />
           ) : (
-            <Auctions
+            <AuctionWorkspace
               lang={lang}
               candidates={candidates}
               onError={setError}
               presetSource={presetSource}
               onPresetUsed={() => setPresetSource(null)}
+              view={tab === "draft" ? "draft" : "auctions"}
+              onOpenDraft={() => setTab("draft")}
+              onBackToAuctions={() => setTab("auctions")}
+              onCandidates={setCandidates}
             />
           )}
         </main>

@@ -54,6 +54,21 @@ export function reorderEntry(
   list.entries.splice(clamped, 0, candidateId);
 }
 
+export function shouldCopyCandidateOnEdit(referenced: boolean): boolean {
+  return referenced;
+}
+
+export function replaceEntryId(
+  entries: string[],
+  oldId: string,
+  newId: string,
+): string[] {
+  if (!entries.includes(oldId)) throw new Error("entry not found");
+  if (oldId !== newId && entries.includes(newId))
+    throw new Error("duplicate entry");
+  return entries.map((e) => (e === oldId ? newId : e));
+}
+
 export interface AuctionDraft {
   id: string;
   name: string;
