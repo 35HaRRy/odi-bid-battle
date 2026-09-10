@@ -1,0 +1,42 @@
+/* Layout helpers for classes the prototype markup uses but ships unstyled.
+   Visual language (parchment, ink, green) comes from design.css. */
+.home-filter {
+  margin-bottom: 18px;
+}
+.home-filter input {
+  max-width: 380px;
+  width: 100%;
+}
+.table-scroll {
+  overflow: auto;
+}
+.list-library {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 26px;
+  margin-bottom: 30px;
+}
+.list-entry {
+  border: 1px solid var(--line);
+  background: var(--page);
+  padding: 18px;
+}
+.list-entry[aria-current="true"] {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+.create-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 22px;
+}
+.create-row label {
+  min-width: 200px;
+}
+@media (max-width: 800px) {
+  .list-library {
+    grid-template-columns: 1fr;
+  }
+}

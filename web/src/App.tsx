@@ -2,12 +2,183 @@ import { useEffect, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
 
-function Banner({ msg }: { msg: string | null }) {
-  if (!msg) return null;
+type Tab = "auctions" | "catalog" | "lists";
+
+function nameOf(candidates: Candidate[], id: string): string {
+  return candidates.find((c) => c.id === id)?.name ?? id;
+}
+
+function TreeMark() {
   return (
-    <div role="alert" style={{ background: "#7f1d1d", color: "#fff", padding: 8 }}>
-      {msg}
+    <svg viewBox="0 0 38 43" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M19 4v35M9 14l10 8 10-8M9 24l10 7 10-7" />
+    </svg>
+  );
+}
+
+function Status({ msg }: { msg: string | null }) {
+  return (
+    <div className={msg ? "status error" : "status"} role="alert">
+      {msg ?? ""}
     </div>
+  );
+}
+
+function AppHeading({
+  title,
+  intro,
+  action,
+}: {
+  title: string;
+  intro: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="app-heading">
+      <div>
+        <h1>{title}</h1>
+        <p>{intro}</p>
+      </div>
+      {action && <div className="header-tools">{action}</div>}
+    </div>
+  );
+}
+
+function Steps({ lang, current }: { lang: Lang; current: number }) {
+  const keys = ["stepBattle", "stepList", "stepTeams", "stepReview"];
+  return (
+    <div className="steps" role="list" aria-label={t(lang, "stepList")}>
+      {keys.map((k, i) => (
+        <button
+          key={k}
+          role="listitem"
+          className="step"
+          aria-current={i === current ? "step" : undefined}
+          disabled={i !== current}
+          title={i !== current ? t(lang, "comingSoon") : undefined}
+        >
+          <span className="step-num">{i + 1}</span>
+          {t(lang, k)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CatalogPane({
+  lang,
+  candidates,
+  addedIds,
+  onAdd,
+}: {
+  lang: Lang;
+  candidates: Candidate[];
+  addedIds: string[];
+  onAdd: (id: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const q = search.toLocaleLowerCase(lang);
+  const shown = candidates.filter((c) =>
+    c.name.toLocaleLowerCase(lang).includes(q),
+  );
+  return (
+    <section className="catalog-pane">
+      <div className="panel-title">
+        <h3>{t(lang, "catalog")}</h3>
+        <span>
+          {candidates.length} {t(lang, "candidates")}
+        </span>
+      </div>
+      <div className="catalog-tools">
+        <input
+          type="search"
+          aria-label={t(lang, "search")}
+          placeholder={t(lang, "search")}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+      <div className="catalog-scroll" tabIndex={0} aria-label={t(lang, "catalog")}>
+        <div className="catalog-grid">
+          {shown.map((c) => (
+            <article className="candidate" key={c.id}>
+              <div className="candidate-image">
+                <img src={api.imageUrl(c.id)} alt={c.name} />
+              </div>
+              <h4>{c.name}</h4>
+              <div className="candidate-controls">
+                <button
+                  className="secondary small-btn"
+                  disabled={addedIds.includes(c.id)}
+                  onClick={() => onAdd(c.id)}
+                >
+                  {addedIds.includes(c.id) ? t(lang, "added") : t(lang, "add")}
+                </button>
+              </div>
+            </article>
+          ))}
+          {shown.length === 0 && (
+            <p className="empty" style={{ gridColumn: "1/-1" }}>
+              {t(lang, "noResults")}
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OrderedEntries({
+  lang,
+  entries,
+  candidates,
+  onReorder,
+  onRemove,
+  emptyText,
+}: {
+  lang: Lang;
+  entries: string[];
+  candidates: Candidate[];
+  onReorder: (id: string, to: number) => void;
+  onRemove: (id: string) => void;
+  emptyText: string;
+}) {
+  return (
+    <ol className="ordered-list" aria-label={t(lang, "entries")} tabIndex={0}>
+      {entries.map((cid, idx) => (
+        <li className="ordered-item" key={cid}>
+          <span className="order-number">{idx + 1}</span>
+          <img src={api.imageUrl(cid)} alt="" />
+          <span className="ordered-name">{nameOf(candidates, cid)}</span>
+          <div className="ordered-actions">
+            <button
+              className="icon-button"
+              aria-label={`${nameOf(candidates, cid)}: ${t(lang, "up")}`}
+              disabled={idx === 0}
+              onClick={() => onReorder(cid, idx - 1)}
+            >
+              ↑
+            </button>
+            <button
+              className="icon-button"
+              aria-label={`${nameOf(candidates, cid)}: ${t(lang, "down")}`}
+              disabled={idx === entries.length - 1}
+              onClick={() => onReorder(cid, idx + 1)}
+            >
+              ↓
+            </button>
+            <button
+              className="icon-button"
+              aria-label={`${nameOf(candidates, cid)}: ${t(lang, "remove")}`}
+              onClick={() => onRemove(cid)}
+            >
+              ✕
+            </button>
+          </div>
+        </li>
+      ))}
+      {entries.length === 0 && <li className="empty">{emptyText}</li>}
+    </ol>
   );
 }
 
@@ -24,6 +195,11 @@ function Catalog({
 }) {
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [search, setSearch] = useState("");
+  const q = search.toLocaleLowerCase(lang);
+  const shown = items.filter((c) =>
+    c.name.toLocaleLowerCase(lang).includes(q),
+  );
 
   async function create() {
     if (!name.trim() || !file) return;
@@ -48,32 +224,59 @@ function Catalog({
   }
 
   return (
-    <section>
-      <h2>{t(lang, "catalog")}</h2>
-      <div>
+    <section className="route-catalog">
+      <AppHeading title={t(lang, "catalog")} intro={t(lang, "catalogIntro")} />
+      <div className="library-tools">
         <input
-          aria-label={t(lang, "name")}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t(lang, "name")}
+          type="search"
+          aria-label={t(lang, "search")}
+          placeholder={t(lang, "search")}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
         />
-        <input
-          aria-label={t(lang, "image")}
-          type="file"
-          accept="image/*"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-        <button onClick={create}>{t(lang, "create")}</button>
+        <span>
+          {items.length} {t(lang, "candidates")}
+        </span>
       </div>
-      <ul>
-        {items.map((c) => (
-          <li key={c.id}>
-            <img src={api.imageUrl(c.id)} alt="" width={48} height={48} />
-            <span>{c.name}</span>{" "}
-            <button onClick={() => archive(c.id)}>{t(lang, "archive")}</button>
-          </li>
+      <div className="create-row">
+        <label>
+          {t(lang, "name")}
+          <input
+            aria-label={t(lang, "name")}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t(lang, "newCandidate")}
+          />
+        </label>
+        <label>
+          {t(lang, "image")}
+          <input
+            aria-label={t(lang, "image")}
+            type="file"
+            accept="image/*"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+        </label>
+        <button className="primary" onClick={create}>
+          {t(lang, "create")}
+        </button>
+      </div>
+      <div className="full-catalog">
+        {shown.map((c) => (
+          <article className="candidate" key={c.id}>
+            <div className="candidate-image">
+              <img src={api.imageUrl(c.id)} alt={c.name} />
+            </div>
+            <h4>{c.name}</h4>
+            <div className="candidate-controls">
+              <button className="quiet" onClick={() => archive(c.id)}>
+                {t(lang, "archive")}
+              </button>
+            </div>
+          </article>
         ))}
-      </ul>
+      </div>
+      {shown.length === 0 && <p className="empty">{t(lang, "noResults")}</p>}
     </section>
   );
 }
@@ -83,16 +286,17 @@ function Lists({
   candidates,
   onCandidates,
   onError,
+  onUseList,
 }: {
   lang: Lang;
   candidates: Candidate[];
   onCandidates: (c: Candidate[]) => void;
   onError: (m: string | null) => void;
+  onUseList: (listId: string) => void;
 }) {
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [addId, setAddId] = useState("");
   const [newName, setNewName] = useState("");
   const [newFile, setNewFile] = useState<File | null>(null);
   const active = lists.find((l) => l.id === activeId) ?? null;
@@ -143,111 +347,140 @@ function Lists({
     }
   }
 
+  const valid =
+    !!active && active.entries.length >= 4 && active.entries.length % 2 === 0;
+
   return (
-    <section>
-      <h2>{t(lang, "lists")}</h2>
-      <div>
-        <input
-          aria-label={t(lang, "name")}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t(lang, "newList")}
-        />
-        <button onClick={createList}>{t(lang, "saveList")}</button>
+    <section className="route-lists">
+      <AppHeading title={t(lang, "lists")} intro={t(lang, "listsIntro")} />
+      <div className="create-row">
+        <label>
+          {t(lang, "newList")}
+          <input
+            aria-label={t(lang, "name")}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t(lang, "newList")}
+          />
+        </label>
+        <button className="primary" onClick={createList}>
+          {t(lang, "saveList")}
+        </button>
       </div>
-      <div>
+      <div className="list-library">
         {lists.map((l) => (
-          <button
+          <section
+            className="list-entry"
             key={l.id}
-            onClick={() => setActiveId(l.id)}
-            style={{ fontWeight: l.id === activeId ? "bold" : "normal" }}
+            aria-current={l.id === activeId ? "true" : undefined}
           >
-            {l.name || t(lang, "draft")}
-          </button>
+            <div className="panel-title">
+              <h2>{l.name || t(lang, "draft")}</h2>
+              <span>
+                {l.entries.length} {t(lang, "candidates")}
+              </span>
+            </div>
+            <div className="review-candidates">
+              {l.entries.map((cid) => (
+                <img
+                  key={cid}
+                  src={api.imageUrl(cid)}
+                  alt={nameOf(candidates, cid)}
+                  title={nameOf(candidates, cid)}
+                />
+              ))}
+            </div>
+            <p>{t(lang, "savedSource")}</p>
+            <div className="battle-entry-actions">
+              <button
+                className="secondary small-btn"
+                onClick={() => setActiveId(l.id)}
+              >
+                {t(lang, "selectList")}
+              </button>
+              <button className="quiet" onClick={() => onUseList(l.id)}>
+                {t(lang, "useList")}
+              </button>
+            </div>
+          </section>
         ))}
       </div>
+      {lists.length === 0 && <p className="empty">{t(lang, "noLists")}</p>}
       {active && (
-        <div>
-          <h3>
-            {active.name || t(lang, "draft")} — {t(lang, "entries")}:{" "}
-            {active.entries.length}
-          </h3>
-          <div>
-            <select
-              aria-label={t(lang, "addExisting")}
-              value={addId}
-              onChange={(e) => setAddId(e.target.value)}
-            >
-              <option value="">{t(lang, "addExisting")}</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <button
-              disabled={!addId}
-              onClick={() => mutate(api.addEntry(active.id, addId))}
-            >
-              {t(lang, "add")}
-            </button>
-          </div>
-          <div>
-            <input
-              aria-label={t(lang, "name")}
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder={t(lang, "createAndAdd")}
+        <div className="split">
+          <CatalogPane
+            lang={lang}
+            candidates={candidates}
+            addedIds={active.entries}
+            onAdd={(cid) => mutate(api.addEntry(active.id, cid))}
+          />
+          <section>
+            <div className="selected-head">
+              <h3>{active.name || t(lang, "draft")}</h3>
+              <span className="mini-label">
+                {active.entries.length} {t(lang, "candidates")}
+              </span>
+            </div>
+            <p className="source">{t(lang, "savedSource")}</p>
+            <div className="create-row">
+              <label>
+                {t(lang, "createAndAdd")}
+                <input
+                  aria-label={t(lang, "name")}
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder={t(lang, "createAndAdd")}
+                />
+              </label>
+              <label>
+                {t(lang, "image")}
+                <input
+                  aria-label={t(lang, "image")}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setNewFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              <button className="secondary" onClick={createAndAdd}>
+                {t(lang, "create")}
+              </button>
+            </div>
+            <OrderedEntries
+              lang={lang}
+              entries={active.entries}
+              candidates={candidates}
+              onReorder={(cid, to) => mutate(api.reorder(active.id, cid, to))}
+              onRemove={(cid) => mutate(api.removeEntry(active.id, cid))}
+              emptyText={t(lang, "emptyList")}
             />
-            <input
-              aria-label={t(lang, "image")}
-              type="file"
-              accept="image/*"
-              onChange={(e) => setNewFile(e.target.files?.[0] ?? null)}
-            />
-            <button onClick={createAndAdd}>{t(lang, "create")}</button>
-          </div>
-          <ol>
-            {active.entries.map((cid, idx) => (
-              <li key={cid}>
-                <img src={api.imageUrl(cid)} alt="" width={40} height={40} />
-                {candidates.find((c) => c.id === cid)?.name ?? cid}
-                <button
-                  onClick={() =>
-                    mutate(api.reorder(active.id, cid, idx - 1))
-                  }
-                >
-                  {t(lang, "up")}
-                </button>
-                <button
-                  onClick={() =>
-                    mutate(api.reorder(active.id, cid, idx + 1))
-                  }
-                >
-                  {t(lang, "down")}
-                </button>
-                <button
-                  onClick={() => mutate(api.removeEntry(active.id, cid))}
-                >
-                  {t(lang, "remove")}
-                </button>
-              </li>
-            ))}
-          </ol>
+            <p className={`validation-note ${valid ? "" : "error"}`}>
+              {t(lang, valid ? "validList" : "invalidList")}
+            </p>
+          </section>
         </div>
       )}
     </section>
   );
 }
 
+function stateKey(status: string): string {
+  if (status === "ongoing") return "liveState";
+  if (status === "completed") return "endedState";
+  return "draftState";
+}
+
 function Auctions({
   lang,
   candidates,
   onError,
+  presetSource,
+  onPresetUsed,
 }: {
   lang: Lang;
   candidates: Candidate[];
   onError: (m: string | null) => void;
+  presetSource: string | null;
+  onPresetUsed: () => void;
 }) {
   const [auctions, setAuctions] = useState<Auction[]>([]);
   const [activeId, setActiveId] = useState<string | null>(() =>
@@ -258,7 +491,6 @@ function Auctions({
   const [sourceId, setSourceId] = useState("");
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [rename, setRename] = useState("");
-  const [addId, setAddId] = useState("");
   const active = auctions.find((a) => a.id === activeId) ?? null;
 
   useEffect(() => {
@@ -269,7 +501,6 @@ function Auctions({
     api
       .auctions()
       .then(async (as) => {
-        // resume selected draft after restart; refresh from server truth
         const stored = localStorage.getItem("obb-selected-auction");
         if (stored) {
           try {
@@ -290,6 +521,13 @@ function Auctions({
       })
       .catch(() => onError(t(lang, "persistFail")));
   }, [lang, onError]);
+
+  useEffect(() => {
+    if (presetSource) {
+      setSourceId(presetSource);
+      onPresetUsed();
+    }
+  }, [presetSource, onPresetUsed]);
 
   useEffect(() => {
     setRename(active?.name ?? "");
@@ -330,114 +568,156 @@ function Auctions({
   );
 
   return (
-    <section>
-      <h2>{t(lang, "auctions")}</h2>
-      <div>
+    <section className="route-home">
+      <AppHeading title={t(lang, "homeTitle")} intro={t(lang, "homeIntro")} />
+      <div className="create-row">
+        <label>
+          {t(lang, "draftName")}
+          <input
+            aria-label={t(lang, "draftName")}
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder={t(lang, "draftName")}
+          />
+        </label>
+        <label>
+          {t(lang, "fromList")}
+          <select
+            aria-label={t(lang, "fromList")}
+            value={sourceId}
+            onChange={(e) => setSourceId(e.target.value)}
+          >
+            <option value="">{t(lang, "fromList")}</option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name || t(lang, "draft")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="primary" onClick={create}>
+          {t(lang, "createDraft")}
+        </button>
+      </div>
+      <div className="home-filter">
         <input
+          type="search"
           aria-label={t(lang, "searchAuctions")}
+          placeholder={t(lang, "searchAuctions")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder={t(lang, "searchAuctions")}
         />
       </div>
-      <div>
-        <input
-          aria-label={t(lang, "draftName")}
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder={t(lang, "draftName")}
-        />
-        <select
-          aria-label={t(lang, "fromList")}
-          value={sourceId}
-          onChange={(e) => setSourceId(e.target.value)}
-        >
-          <option value="">{t(lang, "fromList")}</option>
-          {lists.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name || t(lang, "draft")}
-            </option>
-          ))}
-        </select>
-        <button onClick={create}>{t(lang, "createDraft")}</button>
+      <div className="table-scroll">
+        <table className="auction-table">
+          <thead>
+            <tr>
+              <th>{t(lang, "recordName")}</th>
+              <th>{t(lang, "recordState")}</th>
+              <th>{t(lang, "recordCandidates")}</th>
+              <th>
+                <span className="file-hidden">{t(lang, "actions")}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((a) => (
+              <tr key={a.id}>
+                <td>{a.name || t(lang, "draft")}</td>
+                <td>
+                  <span
+                    className={`state-tag ${a.status === "ongoing" ? "running" : ""}`}
+                  >
+                    {t(lang, stateKey(a.status))}
+                  </span>
+                </td>
+                <td>{a.entries.length}</td>
+                <td>
+                  <div className="record-actions">
+                    <button
+                      className="secondary small-btn"
+                      onClick={() => open(a.id)}
+                    >
+                      {t(lang, a.status === "draft" ? "openDraft" : "resume")}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <div>
-        {visible.map((a) => (
-          <button
-            key={a.id}
-            onClick={() => open(a.id)}
-            style={{ fontWeight: a.id === activeId ? "bold" : "normal" }}
-          >
-            {a.name || t(lang, "draft")}
-          </button>
-        ))}
+      {visible.length === 0 && <p className="empty">{t(lang, "noAuctions")}</p>}
+      <div className="home-guide">
+        <section>
+          <h3>{t(lang, "homeHelpTitle")}</h3>
+          <p>{t(lang, "homeHelp")}</p>
+        </section>
+        <section>
+          <h3>{t(lang, "homeLibraryTitle")}</h3>
+          <p>{t(lang, "homeLibrary")}</p>
+        </section>
       </div>
       {active && (
-        <div>
-          <h3>
-            {active.name || t(lang, "draft")} — {t(lang, "entries")}:{" "}
-            {active.entries.length}
-            {active.followsSource ? "" : ""}
-          </h3>
-          <div>
-            <input
-              aria-label={t(lang, "draftName")}
-              value={rename}
-              onChange={(e) => setRename(e.target.value)}
-              placeholder={t(lang, "draftName")}
-            />
-            <button onClick={() => mutate(api.renameAuction(active.id, rename))}>
+        <section aria-label={active.name || t(lang, "draft")}>
+          <div className="section-title">
+            <div>
+              <h2>{active.name || t(lang, "draft")}</h2>
+              <p className="description">
+                {active.entries.length} {t(lang, "candidates")}
+              </p>
+            </div>
+          </div>
+          <Steps lang={lang} current={1} />
+          <div className="create-row">
+            <label>
+              {t(lang, "draftName")}
+              <input
+                aria-label={t(lang, "draftName")}
+                value={rename}
+                onChange={(e) => setRename(e.target.value)}
+                placeholder={t(lang, "draftName")}
+              />
+            </label>
+            <button
+              className="secondary"
+              onClick={() => mutate(api.renameAuction(active.id, rename))}
+            >
               {t(lang, "rename")}
             </button>
           </div>
-          <div>
-            <select
-              aria-label={t(lang, "addExisting")}
-              value={addId}
-              onChange={(e) => setAddId(e.target.value)}
-            >
-              <option value="">{t(lang, "addExisting")}</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <button
-              disabled={!addId}
-              onClick={() => mutate(api.addAuctionEntry(active.id, addId))}
-            >
-              {t(lang, "add")}
-            </button>
+          <div className="split">
+            <CatalogPane
+              lang={lang}
+              candidates={candidates}
+              addedIds={active.entries}
+              onAdd={(cid) => mutate(api.addAuctionEntry(active.id, cid))}
+            />
+            <section>
+              <div className="selected-head">
+                <h3>{active.name || t(lang, "draft")}</h3>
+                <span className="mini-label">
+                  {active.entries.length} {t(lang, "candidates")}
+                </span>
+              </div>
+              <p className={`source ${active.followsSource ? "" : "copy-note"}`}>
+                {t(lang, active.followsSource ? "sourceNote" : "copiedNote")}
+              </p>
+              <OrderedEntries
+                lang={lang}
+                entries={active.entries}
+                candidates={candidates}
+                onReorder={(cid, to) =>
+                  mutate(api.reorderAuction(active.id, cid, to))
+                }
+                onRemove={(cid) =>
+                  mutate(api.removeAuctionEntry(active.id, cid))
+                }
+                emptyText={t(lang, "emptyList")}
+              />
+            </section>
           </div>
-          <ol>
-            {active.entries.map((cid, idx) => (
-              <li key={cid}>
-                <img src={api.imageUrl(cid)} alt="" width={40} height={40} />
-                {candidates.find((c) => c.id === cid)?.name ?? cid}
-                <button
-                  onClick={() =>
-                    mutate(api.reorderAuction(active.id, cid, idx - 1))
-                  }
-                >
-                  {t(lang, "up")}
-                </button>
-                <button
-                  onClick={() =>
-                    mutate(api.reorderAuction(active.id, cid, idx + 1))
-                  }
-                >
-                  {t(lang, "down")}
-                </button>
-                <button
-                  onClick={() => mutate(api.removeAuctionEntry(active.id, cid))}
-                >
-                  {t(lang, "remove")}
-                </button>
-              </li>
-            ))}
-          </ol>
-        </div>
+        </section>
       )}
     </section>
   );
@@ -445,9 +725,10 @@ function Auctions({
 
 export default function App() {
   const [lang, setL] = useState<Lang>(() => getLang());
-  const [tab, setTab] = useState<"catalog" | "lists" | "auctions">("catalog");
+  const [tab, setTab] = useState<Tab>("auctions");
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [presetSource, setPresetSource] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -462,52 +743,95 @@ export default function App() {
     setLang(l);
   }
 
+  function goDraft(sourceId: string) {
+    setPresetSource(sourceId);
+    setTab("auctions");
+  }
+
   return (
     <div>
-      <header>
-        <h1>ODI Bid Battle</h1>
-        <nav>
-          <button onClick={() => setTab("auctions")}>
+      <div className="topstrip">
+        <span>ODI Bid Battle</span>
+        <span>{t(lang, "tagline")}</span>
+      </div>
+      <div className="shell">
+        <header className="masthead">
+          <div className="brand">
+            <TreeMark />
+            <div>
+              <strong>ODI Bid Battle</strong>
+              <small>{t(lang, "tagline")}</small>
+            </div>
+          </div>
+          <div className="header-tools">
+            <label>
+              {t(lang, "language")}{" "}
+              <select
+                aria-label={t(lang, "language")}
+                value={lang}
+                onChange={(e) => switchLang(e.target.value as Lang)}
+              >
+                <option value="tr">Türkçe</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
+        </header>
+        <nav className="app-nav">
+          <button
+            onClick={() => setTab("auctions")}
+            aria-current={tab === "auctions" ? "page" : undefined}
+          >
             {t(lang, "auctions")}
           </button>
-          <button onClick={() => setTab("catalog")}>
+          <button
+            onClick={() => setTab("catalog")}
+            aria-current={tab === "catalog" ? "page" : undefined}
+          >
             {t(lang, "catalog")}
           </button>
-          <button onClick={() => setTab("lists")}>{t(lang, "lists")}</button>
-          <button disabled>
-            {t(lang, "battlefields")} ({t(lang, "comingSoon")})
+          <button
+            onClick={() => setTab("lists")}
+            aria-current={tab === "lists" ? "page" : undefined}
+          >
+            {t(lang, "lists")}
+          </button>
+          <button disabled title={t(lang, "comingSoon")}>
+            {t(lang, "battlefields")}
           </button>
         </nav>
-        <label>
-          {t(lang, "language")}:{" "}
-          <select
-            aria-label={t(lang, "language")}
-            value={lang}
-            onChange={(e) => switchLang(e.target.value as Lang)}
-          >
-            <option value="tr">Türkçe</option>
-            <option value="en">English</option>
-          </select>
-        </label>
-      </header>
-      <Banner msg={error} />
-      {tab === "catalog" ? (
-        <Catalog
-          lang={lang}
-          items={candidates}
-          onItems={setCandidates}
-          onError={setError}
-        />
-      ) : tab === "lists" ? (
-        <Lists
-          lang={lang}
-          candidates={candidates}
-          onCandidates={setCandidates}
-          onError={setError}
-        />
-      ) : (
-        <Auctions lang={lang} candidates={candidates} onError={setError} />
-      )}
+        <Status msg={error} />
+        <main className="content">
+          {tab === "catalog" ? (
+            <Catalog
+              lang={lang}
+              items={candidates}
+              onItems={setCandidates}
+              onError={setError}
+            />
+          ) : tab === "lists" ? (
+            <Lists
+              lang={lang}
+              candidates={candidates}
+              onCandidates={setCandidates}
+              onError={setError}
+              onUseList={goDraft}
+            />
+          ) : (
+            <Auctions
+              lang={lang}
+              candidates={candidates}
+              onError={setError}
+              presetSource={presetSource}
+              onPresetUsed={() => setPresetSource(null)}
+            />
+          )}
+        </main>
+        <footer className="footer">
+          <p>{t(lang, "footerNote")}</p>
+        </footer>
+      </div>
+      <p className="bottom-note">{t(lang, "footerNote")}</p>
     </div>
   );
 }
