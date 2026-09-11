@@ -59,4 +59,26 @@ describe("auction drafts i18n", () => {
       globalThis.fetch = orig;
     }
   });
+
+  it("pins delete-draft copy in both languages", () => {
+    expect(t("tr", "delete")).toBe("Sil");
+    expect(t("en", "delete")).toBe("Delete");
+    expect(t("tr", "deleted")).toBe("Taslak silindi.");
+    expect(t("en", "deleted")).toBe("Draft deleted.");
+  });
+
+  it("surfaces delete failure status to the banner path", async () => {
+    const orig = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: "only drafts can be deleted" }), {
+        status: 409,
+      });
+    try {
+      await expect(api.deleteAuction("auc-live")).rejects.toMatchObject({
+        status: 409,
+      });
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
 });

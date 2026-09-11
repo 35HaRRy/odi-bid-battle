@@ -852,6 +852,7 @@ function AuctionWorkspace({
   const [rename, setRename] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deletedNote, setDeletedNote] = useState(false);
   const [draftStep, setDraftStep] = useState<number>(0);
   const active = auctions.find((a) => a.id === activeId) ?? null;
   const draftEntryIds = active ? active.entries : [];
@@ -935,6 +936,7 @@ function AuctionWorkspace({
         localStorage.removeItem("obb-selected-auction");
         onBackToAuctions();
       }
+      setDeletedNote(true);
       onError(null);
     } catch {
       onError(t(lang, "persistFail"));
@@ -1231,6 +1233,7 @@ function AuctionWorkspace({
         </table>
       </div>
       {visible.length === 0 && <p className="empty">{t(lang, "noAuctions")}</p>}
+      {deletedNote && <p className="save-note">{t(lang, "deleted")}</p>}
       {pendingDeleteId && (
         <ConfirmDialog
           lang={lang}
