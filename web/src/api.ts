@@ -237,6 +237,9 @@ export const api = {
     );
     return r.json();
   },
+  async deleteAuction(id: string): Promise<void> {
+    await check(await fetch(`${BASE}/auctions/${id}`, { method: "DELETE" }));
+  },
   async addAuctionEntry(
     auctionId: string,
     candidateId: string,

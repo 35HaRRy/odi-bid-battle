@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { api } from "./api";
 import { t } from "./i18n";
 
 describe("auction drafts i18n", () => {
@@ -33,5 +34,13 @@ describe("auction drafts i18n", () => {
 
   it("persists selected draft pointer key contract", () => {
     expect("obb-selected-auction").toBe("obb-selected-auction");
+  });
+
+  it("has delete-draft keys and client", async () => {
+    for (const k of ["delete", "deleteDraftTitle", "deleteDraftText", "deleted"]) {
+      expect(t("tr", k)).not.toBe(k);
+      expect(t("en", k)).not.toBe(k);
+    }
+    expect(typeof api.deleteAuction).toBe("function");
   });
 });
