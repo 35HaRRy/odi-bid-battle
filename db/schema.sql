@@ -78,34 +78,10 @@ CREATE TABLE IF NOT EXISTS auction_team_members (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE OR REPLACE FUNCTION validate_team_balance()
-RETURNS TRIGGER AS $$
-BEGIN
-  IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
-    IF EXISTS (
-      SELECT 1 FROM auction_team_members m1
-      JOIN auction_teams t1 ON m1.team_id = t1.id
-      WHERE t1.auction_id = (SELECT auction_id FROM auction_teams WHERE id = NEW.team_id)
-      GROUP BY t1.id
-      HAVING SUM(m1.initial_gold) <> COALESCE((
-        SELECT COALESCE(SUM(m2.initial_gold), 0)
-        FROM auction_team_members m2
-        JOIN auction_teams t2 ON m2.team_id = t2.id
-        WHERE t2.auction_id = (SELECT auction_id FROM auction_teams WHERE id = NEW.team_id) AND t2.id <> t1.id
-      ), 0)
-    ) THEN
-      RAISE EXCEPTION 'team balance constraint: both teams must have equal total gold';
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
+-- Equal budgets are a readiness rule checked in review, not a storage rule:
+-- drafts must remain saveable while temporarily unequal.
 DROP TRIGGER IF EXISTS check_team_balance ON auction_team_members;
-CREATE TRIGGER check_team_balance
-  AFTER INSERT OR UPDATE ON auction_team_members
-  FOR EACH ROW
-  EXECUTE FUNCTION validate_team_balance();
+DROP FUNCTION IF EXISTS validate_team_balance();
 
 -- Upgrade existing databases without discarding legacy selections or image data.
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_image BYTEA;

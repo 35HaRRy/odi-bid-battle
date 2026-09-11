@@ -4,6 +4,7 @@ import multer from "multer";
 import { PgStore } from "./store.js";
 import { AssetError } from "./battlefield-domain.js";
 import { assetErrorHttp, mountBattlefieldRoutes } from "./battlefield-routes.js";
+import { mountTeamRoutes } from "./team-routes.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const DATABASE_URL =
@@ -42,6 +43,7 @@ export function buildApp(store: PgStore): express.Express {
   app.use(cors());
   app.use(express.json());
   mountBattlefieldRoutes(app, store);
+  mountTeamRoutes(app, store);
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 

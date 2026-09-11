@@ -9,8 +9,11 @@ import {
   createAuctionTeam,
   addTeamMember,
   transferMember,
+  transferMemberBetweenTeams,
   calculateTeamTotal,
+  isValidInitialGold,
   validateTeamBalance,
+  validateTeamDraft,
   validateAuctionPreparation,
   type AuctionTeam,
   type AuctionTeamMember,
@@ -164,5 +167,58 @@ describe("auction teams domain", () => {
     team2.members = transferMember(team2.members, alice.id, 0);
     expect(team2.members[0].name).toBe("Alice");
     expect(() => transferMember(team2.members, "missing", 0)).toThrow("member not found");
+  });
+
+  it("transfers a member across teams and retargets teamId", () => {
+    const flag = { buffer: Buffer.from("f"), mime: "image/png", name: "f.png" };
+    const team1 = createAuctionTeam("a-1", "T1", 0, { flag });
+    const team2 = createAuctionTeam("a-1", "T2", 1, { flag });
+    const alice = addTeamMember(team1, "Alice", 10);
+    addTeamMember(team2, "Bob", 20);
+
+    transferMemberBetweenTeams(team1, team2, alice.id);
+
+    expect(team1.members).toHaveLength(0);
+    expect(team2.members).toHaveLength(2);
+    expect(team2.members.map((m) => m.name)).toContain("Alice");
+    expect(team2.members.find((m) => m.id === alice.id)?.teamId).toBe(team2.id);
+    expect(calculateTeamTotal(team1.members)).toBe(0);
+    expect(calculateTeamTotal(team2.members)).toBe(30);
+    expect(() => transferMemberBetweenTeams(team1, team2, "missing")).toThrow("member not found");
+  });
+
+  it("classifies initial gold values for field-level errors", () => {
+    expect(isValidInitialGold(10)).toBe(true);
+    expect(isValidInitialGold(1)).toBe(true);
+    expect(isValidInitialGold(0)).toBe(false);
+    expect(isValidInitialGold(-3)).toBe(false);
+    expect(isValidInitialGold(10.5)).toBe(false);
+    expect(isValidInitialGold(Number.NaN)).toBe(false);
+    expect(isValidInitialGold("10")).toBe(false);
+  });
+
+  it("requires exactly two teams for draft validation", () => {
+    const draft = createAuctionDraft("A", [], null);
+    expect(validateTeamDraft([]).valid).toBe(false);
+    expect(validateTeamDraft([]).errors).toContain("exactly two teams are required");
+    expect(validateAuctionPreparation(draft, []).valid).toBe(false);
+  });
+
+  it("allows unequal totals in draft validation but not in readiness", () => {
+    const flag = { buffer: Buffer.from("f"), mime: "image/png", name: "f.png" };
+    const t1 = createAuctionTeam("a-1", "T1", 0, { flag });
+    const t2 = createAuctionTeam("a-1", "T2", 1, { flag });
+    addTeamMember(t1, "A", 10);
+    addTeamMember(t2, "B", 20);
+
+    const draft = validateTeamDraft([t1, t2]);
+    expect(draft.valid).toBe(true);
+    expect(draft.balance.equal).toBe(false);
+    expect(draft.balance.total1).toBe(10);
+    expect(draft.balance.total2).toBe(20);
+
+    const readiness = validateAuctionPreparation(createAuctionDraft("A", [], null), [t1, t2]);
+    expect(readiness.valid).toBe(false);
+    expect(readiness.errors.some((e) => e.includes("10 vs 20"))).toBe(true);
   });
 });

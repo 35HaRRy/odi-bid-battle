@@ -4,9 +4,11 @@ const BASE =
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  details: unknown;
+  constructor(status: number, message: string, details?: unknown) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -16,6 +18,7 @@ async function check(res: Response): Promise<Response> {
     throw new ApiError(
       res.status,
       (body as { error?: string }).error ?? `http ${res.status}`,
+      body,
     );
   }
   return res;
@@ -46,6 +49,43 @@ export interface BattlefieldSummary {
   geography: string;
   history: string;
   archivedAt: string | null;
+}
+export interface TeamImagePayload {
+  data: string;
+  mime: string;
+  name: string;
+}
+export interface TeamMemberPayload {
+  name: string;
+  initialGold: number;
+  avatar: TeamImagePayload | null;
+}
+export interface TeamPayload {
+  name: string;
+  slogan: string;
+  position: 0 | 1;
+  flag: TeamImagePayload | null;
+  members: TeamMemberPayload[];
+}
+export interface SavedTeamMember {
+  id: string;
+  teamId: string;
+  name: string;
+  initialGold: number;
+  avatar: TeamImagePayload | null;
+}
+export interface SavedTeam {
+  id: string;
+  auctionId: string;
+  name: string;
+  slogan: string | null;
+  position: 0 | 1;
+  flag: TeamImagePayload;
+  members: SavedTeamMember[];
+}
+export interface FieldError {
+  path: string;
+  message: string;
 }
 
 function editForm(name: string, file: File | null): FormData {
@@ -323,5 +363,19 @@ export const api = {
         method: "DELETE",
       }),
     );
+  },
+  async getAuctionTeams(auctionId: string): Promise<SavedTeam[]> {
+    const r = await check(await fetch(`${BASE}/auctions/${auctionId}/teams`));
+    return r.json();
+  },
+  async saveAuctionTeams(auctionId: string, teams: TeamPayload[]): Promise<SavedTeam[]> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/teams`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teams }),
+      }),
+    );
+    return r.json();
   },
 };

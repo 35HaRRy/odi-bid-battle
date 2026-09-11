@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
 import { BattlefieldLibrary, BattlefieldPreparation } from "./battlefields";
+import { DraftTeams } from "./draft-teams";
+import { DraftReview } from "./draft-review";
 
 type Tab = "auctions" | "catalog" | "lists" | "draft" | "battlefields";
 
@@ -211,11 +213,9 @@ function Steps({
           role="listitem"
           className="step"
           aria-current={i === current ? "step" : undefined}
-          disabled={i > 1}
           onClick={() => {
-            if (i <= 1 && onSelect) onSelect(i);
+            if (onSelect) onSelect(i);
           }}
-          title={i > 1 ? t(lang, "comingSoon") : undefined}
         >
           <span className="step-num">{i + 1}</span>
           {t(lang, k)}
@@ -1018,7 +1018,7 @@ function AuctionWorkspace({
                   </button>
                 </div>
               </div>
-            ) : (
+            ) : draftStep === 1 ? (
               <>
                 <div className="create-row">
                   <label>
@@ -1079,7 +1079,35 @@ function AuctionWorkspace({
                     />
                   </section>
                 </div>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "0 34px 20px" }}>
+                  <button className="secondary" onClick={() => setDraftStep(0)}>
+                    &larr; {t(lang, "stepBattle")}
+                  </button>
+                  <button onClick={() => setDraftStep(2)}>
+                    {t(lang, "stepTeams")} &rarr;
+                  </button>
+                </div>
               </>
+            ) : draftStep === 2 ? (
+              <DraftTeams
+                lang={lang}
+                auction={active}
+                onBack={() => setDraftStep(1)}
+                onNext={() => setDraftStep(3)}
+              />
+            ) : (
+              <DraftReview
+                lang={lang}
+                auction={active}
+                battlefieldId={active.battlefieldId}
+                entries={active.entries}
+                namesReady={active.entries.every((id) => {
+                  const resolved = resolveDraftName(id);
+                  return resolved !== id && resolved.trim() !== "";
+                })}
+                resolveName={resolveDraftName}
+                onGoStep={setDraftStep}
+              />
             )}
           </section>
         )}

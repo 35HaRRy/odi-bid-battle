@@ -193,7 +193,7 @@ export function addTeamMember(
 ): AuctionTeamMember {
   if (!name.trim()) throw new Error("member name is required");
   if (name.length > 200) throw new Error("invalid member name");
-  if (!Number.isInteger(initialGold) || initialGold <= 0) throw new Error("invalid initial gold");
+  if (!isValidInitialGold(initialGold)) throw new Error("invalid initial gold");
   const member: AuctionTeamMember = {
     id: randomUUID(),
     teamId: team.id,
@@ -213,10 +213,26 @@ export function transferMember(
 ): AuctionTeamMember[] {
   const fromIdx = members.findIndex((m) => m.id === memberId);
   if (fromIdx === -1) throw new Error("member not found");
-  
+
   const [member] = members.splice(fromIdx, 1);
   members.splice(toPosition, 0, member);
   return members;
+}
+
+export function transferMemberBetweenTeams(
+  from: AuctionTeam,
+  to: AuctionTeam,
+  memberId: string
+): void {
+  const idx = from.members.findIndex((m) => m.id === memberId);
+  if (idx === -1) throw new Error("member not found");
+  const [member] = from.members.splice(idx, 1);
+  member.teamId = to.id;
+  to.members.push(member);
+}
+
+export function isValidInitialGold(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 export function calculateTeamTotal(members: AuctionTeamMember[]): number {
@@ -240,49 +256,78 @@ export function validateTeamBalance(
   return { valid: true };
 }
 
-export function validateAuctionPreparation(
-  auction: AuctionDraft,
-  teams: AuctionTeam[]
-): { valid: boolean; errors: string[] } {
+export interface TeamBalance {
+  total1: number;
+  total2: number;
+  equal: boolean;
+  difference: number;
+}
+
+export interface TeamDraftValidation {
+  valid: boolean;
+  errors: string[];
+  balance: TeamBalance;
+}
+
+function teamBalanceOf(teams: AuctionTeam[]): TeamBalance {
+  const total1 = teams.length > 0 ? calculateTeamTotal(teams[0].members) : 0;
+  const total2 = teams.length > 1 ? calculateTeamTotal(teams[1].members) : 0;
+  return { total1, total2, equal: total1 === total2, difference: Math.abs(total1 - total2) };
+}
+
+// Draft saving allows temporary inequality; only field-level problems block it.
+export function validateTeamDraft(teams: AuctionTeam[]): TeamDraftValidation {
   const errors: string[] = [];
-  
+
+  if (teams.length !== 2) errors.push("exactly two teams are required");
+
   // Check team names and slogans
   for (const team of teams) {
     if (!team.name.trim()) errors.push("team name is required");
     if (team.name.length > 200) errors.push("team name too long");
   }
-  
+
   // Check team flags
   for (const team of teams) {
     if (!team.flag.buffer || team.flag.buffer.length === 0) {
       errors.push(`team "${team.name || 'unnamed'}" flag is required`);
     }
   }
-  
+
   // Check each team has at least one member
   for (const team of teams) {
     if (team.members.length === 0) {
       errors.push(`team "${team.name}" must have at least one member`);
     }
   }
-  
+
   // Check member names and gold
   for (const team of teams) {
     for (const member of team.members) {
       if (!member.name.trim()) errors.push(`member name in team "${team.name}" is required`);
-      if (!Number.isInteger(member.initialGold) || member.initialGold <= 0) {
+      if (!isValidInitialGold(member.initialGold)) {
         errors.push(`invalid initial gold for member "${member.name}" in team "${team.name}"`);
       }
     }
   }
-  
-  // Check equal totals
+
+  return { valid: errors.length === 0, errors, balance: teamBalanceOf(teams) };
+}
+
+// Readiness for review/start adds the equal-budget rule on top of draft rules.
+export function validateAuctionPreparation(
+  auction: AuctionDraft,
+  teams: AuctionTeam[]
+): { valid: boolean; errors: string[] } {
+  const draft = validateTeamDraft(teams);
+  const errors = [...draft.errors];
+
   if (teams.length === 2) {
     const validation = validateTeamBalance(teams[0], teams[1]);
     if (!validation.valid) {
       errors.push(validation.error || "teams must have equal total gold");
     }
   }
-  
+
   return { valid: errors.length === 0, errors };
 }

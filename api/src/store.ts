@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { AssetError } from "./battlefield-domain.js";
 import { BattlefieldStore } from "./battlefield-store.js";
+import { TeamStore } from "./team-store.js";
 
 export class PersistenceError extends Error {
   constructor(message: string, opts?: { cause?: unknown }) {
@@ -76,6 +77,7 @@ export class PgStore {
   readonly pool: Pool | null;
   private q: Queryable;
   private assetStore?: Pick<BattlefieldStore, keyof BattlefieldStore>;
+  private teamRepository?: Pick<TeamStore, keyof TeamStore>;
 
   constructor(pool: Queryable & { end?: () => Promise<void> }) {
     this.q = pool;
@@ -109,6 +111,29 @@ export class PgStore {
       };
     }
     return this.assetStore;
+  }
+
+  get teams(): Pick<TeamStore, keyof TeamStore> {
+    if (!this.teamRepository) {
+      if (!this.pool || typeof this.pool.connect !== "function") {
+        throw pgError("failed to access team storage", new Error("no pool"));
+      }
+      const teams = new TeamStore(this.pool);
+      // Wrap at this boundary so the focused repository never imports PgStore.
+      const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+        try {
+          return await operation();
+        } catch (err) {
+          if (err instanceof AssetError || err instanceof PersistenceError) throw err;
+          throw pgError("failed to persist auction teams", err);
+        }
+      };
+      this.teamRepository = {
+        getAuctionTeams: (auctionId) => run(() => teams.getAuctionTeams(auctionId)),
+        saveAuctionTeams: (auctionId, teamList) => run(() => teams.saveAuctionTeams(auctionId, teamList)),
+      };
+    }
+    return this.teamRepository;
   }
 
   static async connect(url: string): Promise<PgStore> {

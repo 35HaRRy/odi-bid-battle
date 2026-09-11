@@ -1,4 +1,4 @@
-# Team Preparation — Design (Issue #6)
+# Team Preparation ï¿½ Design (Issue #6)
 
 Date: 2026-09-10. Status: Approved for implementation.
 
@@ -27,7 +27,7 @@ Implement two-team preparation in auction drafts with member management, gold bu
 - Teams are editable until starting the auction
 - Member transfer moves a member from one team to the other with a directional button
 - Total team gold is calculated from members, not entered separately
-- Equality is required for all saved teams; temporary inequality is permitted while editing
+- Temporary inequality is permitted while editing and saving drafts; equality is a readiness rule checked at review/start, not a storage rule
 - Zero gold is rejected with field-level validation
 - Teams and members belong to the auction, not a shared catalog
 - Creating a new draft from a previous auction reuses its team preparation information
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS auction_team_members (
 );
 `
 
-**Validation constraint:** Trigger on uction_team_members that checks total gold of both teams in the auction must be equal. Rejects INSERT/UPDATE with 	eam balance constraint: X vs Y error.
+**Validation constraint:** No database trigger on team balance. Drafts must stay saveable while temporarily unequal; validateTeamDraft (saveable) vs validateAuctionPreparation (readiness, requires equal totals) enforce this split at the domain layer.
 
 ## API Contract
 
@@ -226,7 +226,8 @@ export function DraftReview({ lang, auction, onAuctionChange, onBack, onNext }: 
 - Preparation lock notice
 - Start button (disabled if validation fails)
 
-**Implementation:** Copy design from prototype eviewView() function, adapt to React.
+**Implementation:** Copy design from prototype 
+eviewView() function, adapt to React.
 
 ### Integration into web/src/App.tsx
 
@@ -279,14 +280,14 @@ tr: {
   gold: "altin",
   teamName: "Takim Adi",
   slogan: "Slogan",
-  memberName: "Üye Adi",
-  initialGold: "Baslangiç Altini",
+  memberName: "ï¿½ye Adi",
+  initialGold: "Baslangiï¿½ Altini",
   actions: "Eylemler",
   optional: "Opsiyonel",
-  addMember: "Üye Ekle",
-  moveMember: "Üye Tasi",
+  addMember: "ï¿½ye Ekle",
+  moveMember: "ï¿½ye Tasi",
   requiredName: "Gerekli alan",
-  invalidGold: "Geçersiz altin",
+  invalidGold: "Geï¿½ersiz altin",
 },
 
 en: {
