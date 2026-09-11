@@ -851,6 +851,7 @@ function AuctionWorkspace({
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [rename, setRename] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [draftStep, setDraftStep] = useState<number>(0);
   const active = auctions.find((a) => a.id === activeId) ?? null;
   const draftEntryIds = active ? active.entries : [];
@@ -920,6 +921,24 @@ function AuctionWorkspace({
     setActiveId(id);
     localStorage.setItem("obb-selected-auction", id);
     onOpenDraft();
+  }
+
+  async function confirmDeleteDraft() {
+    if (!pendingDeleteId) return;
+    const id = pendingDeleteId;
+    setPendingDeleteId(null);
+    try {
+      await api.deleteAuction(id);
+      setAuctions((ls) => ls.filter((x) => x.id !== id));
+      if (activeId === id) {
+        setActiveId(null);
+        localStorage.removeItem("obb-selected-auction");
+        onBackToAuctions();
+      }
+      onError(null);
+    } catch {
+      onError(t(lang, "persistFail"));
+    }
   }
 
   async function mutate(p: Promise<Auction>) {
@@ -1199,6 +1218,11 @@ function AuctionWorkspace({
                     >
                       {t(lang, a.status === "draft" ? "openDraft" : "resume")}
                     </button>
+                    {a.status === "draft" && (
+                      <button className="secondary small-btn" onClick={() => setPendingDeleteId(a.id)}>
+                        {t(lang, "delete")}
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -1207,6 +1231,17 @@ function AuctionWorkspace({
         </table>
       </div>
       {visible.length === 0 && <p className="empty">{t(lang, "noAuctions")}</p>}
+      {pendingDeleteId && (
+        <ConfirmDialog
+          lang={lang}
+          title={t(lang, "deleteDraftTitle")}
+          body={t(lang, "deleteDraftText")}
+          confirmLabel={t(lang, "delete")}
+          danger
+          onCancel={() => setPendingDeleteId(null)}
+          onConfirm={confirmDeleteDraft}
+        />
+      )}
       <div className="home-guide">
         <section>
           <h3>{t(lang, "homeHelpTitle")}</h3>

@@ -43,4 +43,20 @@ describe("auction drafts i18n", () => {
     }
     expect(typeof api.deleteAuction).toBe("function");
   });
+
+  it("calls DELETE /auctions/:id on deleteAuction", async () => {
+    const calls: string[] = [];
+    const orig = globalThis.fetch;
+    // @ts-expect-error stub
+    globalThis.fetch = async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      return new Response(null, { status: 204 });
+    };
+    try {
+      await api.deleteAuction("auc-1");
+      expect(calls.some((c) => c.includes("DELETE") && c.includes("/auctions/auc-1"))).toBe(true);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
 });
