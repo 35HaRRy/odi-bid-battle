@@ -142,3 +142,147 @@ export function reorderEntryInDraft(
   draft.entries.splice(from, 1);
   draft.entries.splice(clamped, 0, candidateId);
 }
+
+export interface AuctionTeam {
+  id: string;
+  auctionId: string;
+  name: string;
+  slogan: string | null;
+  flag: { buffer: Buffer; mime: string; name: string };
+  position: 0 | 1;
+  members: AuctionTeamMember[];
+  createdAt: string;
+}
+
+export interface AuctionTeamMember {
+  id: string;
+  teamId: string;
+  name: string;
+  avatar: { buffer: Buffer | null; mime: string | null; name: string | null };
+  initialGold: number;
+  createdAt: string;
+}
+
+export function createAuctionTeam(
+  auctionId: string,
+  name: string,
+  position: 0 | 1,
+  opts: { slogan?: string; flag?: { buffer: Buffer; mime: string; name: string } } = {}
+): AuctionTeam {
+  if (!name.trim()) throw new Error("team name is required");
+  if (name.length > 200) throw new Error("invalid team name");
+  if (opts.slogan && opts.slogan.length > 500) throw new Error("invalid slogan");
+  if (!opts.flag?.buffer || opts.flag.buffer.length === 0) throw new Error("flag is required");
+  return {
+    id: randomUUID(),
+    auctionId,
+    name: name.trim(),
+    slogan: opts.slogan?.trim() || null,
+    flag: opts.flag,
+    position,
+    members: [],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export function addTeamMember(
+  team: AuctionTeam,
+  name: string,
+  initialGold = 10,
+  opts: { avatar?: { buffer: Buffer | null; mime: string | null; name: string | null } } = {}
+): AuctionTeamMember {
+  if (!name.trim()) throw new Error("member name is required");
+  if (name.length > 200) throw new Error("invalid member name");
+  if (!Number.isInteger(initialGold) || initialGold <= 0) throw new Error("invalid initial gold");
+  const member: AuctionTeamMember = {
+    id: randomUUID(),
+    teamId: team.id,
+    name: name.trim(),
+    avatar: opts.avatar || { buffer: null, mime: null, name: null },
+    initialGold,
+    createdAt: new Date().toISOString(),
+  };
+  team.members.push(member);
+  return member;
+}
+
+export function transferMember(
+  members: AuctionTeamMember[],
+  memberId: string,
+  toPosition: 0 | 1
+): AuctionTeamMember[] {
+  const fromIdx = members.findIndex((m) => m.id === memberId);
+  if (fromIdx === -1) throw new Error("member not found");
+  
+  const [member] = members.splice(fromIdx, 1);
+  members.splice(toPosition, 0, member);
+  return members;
+}
+
+export function calculateTeamTotal(members: AuctionTeamMember[]): number {
+  return members.reduce((sum, m) => sum + m.initialGold, 0);
+}
+
+export function validateTeamBalance(
+  team1: AuctionTeam,
+  team2: AuctionTeam
+): { valid: boolean; error?: string } {
+  const total1 = calculateTeamTotal(team1.members);
+  const total2 = calculateTeamTotal(team2.members);
+  
+  if (total1 !== total2) {
+    return {
+      valid: false,
+      error: `team balance constraint: both teams must have equal total gold (${total1} vs ${total2})`,
+    };
+  }
+  
+  return { valid: true };
+}
+
+export function validateAuctionPreparation(
+  auction: AuctionDraft,
+  teams: AuctionTeam[]
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  // Check team names and slogans
+  for (const team of teams) {
+    if (!team.name.trim()) errors.push("team name is required");
+    if (team.name.length > 200) errors.push("team name too long");
+  }
+  
+  // Check team flags
+  for (const team of teams) {
+    if (!team.flag.buffer || team.flag.buffer.length === 0) {
+      errors.push(`team "${team.name || 'unnamed'}" flag is required`);
+    }
+  }
+  
+  // Check each team has at least one member
+  for (const team of teams) {
+    if (team.members.length === 0) {
+      errors.push(`team "${team.name}" must have at least one member`);
+    }
+  }
+  
+  // Check member names and gold
+  for (const team of teams) {
+    for (const member of team.members) {
+      if (!member.name.trim()) errors.push(`member name in team "${team.name}" is required`);
+      if (!Number.isInteger(member.initialGold) || member.initialGold <= 0) {
+        errors.push(`invalid initial gold for member "${member.name}" in team "${team.name}"`);
+      }
+    }
+  }
+  
+  // Check equal totals
+  if (teams.length === 2) {
+    const validation = validateTeamBalance(teams[0], teams[1]);
+    if (!validation.valid) {
+      errors.push(validation.error || "teams must have equal total gold");
+    }
+  }
+  
+  return { valid: errors.length === 0, errors };
+}
