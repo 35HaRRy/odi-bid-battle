@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
 import { Modal } from "./modal";
@@ -7,6 +7,28 @@ import { DraftTeams } from "./draft-teams";
 import { DraftReview } from "./draft-review";
 
 type Tab = "auctions" | "catalog" | "lists" | "draft" | "battlefields";
+
+const TABS: readonly Tab[] = [
+  "auctions",
+  "catalog",
+  "lists",
+  "draft",
+  "battlefields",
+];
+
+function isTab(value: string | null): value is Tab {
+  return value !== null && (TABS as readonly string[]).includes(value);
+}
+
+function readTabFromUrl(): Tab {
+  if (typeof window === "undefined" || !window.location?.search) return "auctions";
+  try {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    return isTab(tab) ? tab : "auctions";
+  } catch {
+    return "auctions";
+  }
+}
 
 function nameOf(
   candidates: Candidate[],
@@ -455,7 +477,15 @@ function Catalog({
 
   return (
     <section className="route-catalog">
-      <AppHeading title={t(lang, "catalog")} intro={t(lang, "catalogIntro")} />
+      <AppHeading
+        title={t(lang, "catalog")}
+        intro={t(lang, "catalogIntro")}
+        action={
+          <button className="primary" onClick={() => setShowCreate(true)}>
+            {t(lang, "newCandidate")}
+          </button>
+        }
+      />
       <div className="library-tools">
         <input
           type="search"
@@ -467,11 +497,6 @@ function Catalog({
         <span>
           {items.length} {t(lang, "candidates")}
         </span>
-      </div>
-      <div className="create-row">
-        <button className="primary" onClick={() => setShowCreate(true)}>
-          {t(lang, "newCandidate")}
-        </button>
       </div>
       {showCreate && (
         <Modal titleId="candidate-create-title" onClose={closeCreate}>
@@ -521,27 +546,29 @@ function Catalog({
           </dialog>
         </Modal>
       )}
-      <div className="full-catalog">
-        {shown.map((c) => (
-          <article className="candidate" key={c.id}>
-            <div className="candidate-image">
-              <img src={api.imageUrl(c.id)} alt={c.name} />
-            </div>
-            <h4>{c.name}</h4>
-            <div className="candidate-controls">
-              <button
-                className="secondary small-btn"
-                aria-label={`${c.name}: ${t(lang, "edit")}`}
-                onClick={() => setEditingId(c.id)}
-              >
-                {t(lang, "edit")}
-              </button>
-              <button className="quiet" onClick={() => archive(c.id)}>
-                {t(lang, "archive")}
-              </button>
-            </div>
-          </article>
-        ))}
+      <div className="full-catalog-scroll" tabIndex={0} aria-label={t(lang, "catalog")}>
+        <div className="full-catalog">
+          {shown.map((c) => (
+            <article className="candidate" key={c.id}>
+              <div className="candidate-image">
+                <img src={api.imageUrl(c.id)} alt={c.name} />
+              </div>
+              <h4>{c.name}</h4>
+              <div className="candidate-controls">
+                <button
+                  className="secondary small-btn"
+                  aria-label={`${c.name}: ${t(lang, "edit")}`}
+                  onClick={() => setEditingId(c.id)}
+                >
+                  {t(lang, "edit")}
+                </button>
+                <button className="quiet" onClick={() => archive(c.id)}>
+                  {t(lang, "archive")}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
       </div>
       {shown.length === 0 && <p className="empty">{t(lang, "noResults")}</p>}
       {editing && (
@@ -575,13 +602,11 @@ function Lists({
   candidates,
   onCandidates,
   onError,
-  onUseList,
 }: {
   lang: Lang;
   candidates: Candidate[];
   onCandidates: (c: Candidate[]) => void;
   onError: (m: string | null) => void;
-  onUseList: (listId: string) => void;
 }) {
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -593,10 +618,11 @@ function Lists({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingScope, setEditingScope] = useState<"entry" | "catalog">("entry");
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [cloningId, setCloningId] = useState<string | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
   const active = lists.find((l) => l.id === activeId) ?? null;
   const allEntryIds = lists.flatMap((l) => l.entries);
-  const extraNames = useMissingCandidateNames(candidates, allEntryIds, (found) =>
-    onCandidates([...candidates, ...found.filter((c) => !candidates.some((x) => x.id === c.id))]));
+  const extraNames = useMissingCandidateNames(candidates, allEntryIds, () => {});
   const resolveName = (id: string) => nameOf(candidates, id, extraNames);
   const editingCandidate =
     editingId ? [...candidates].find((c) => c.id === editingId) : null;
@@ -628,6 +654,27 @@ function Lists({
   function closeCreateList() {
     setShowCreateList(false);
     setName("");
+  }
+
+  function scrollToEditor() {
+    requestAnimationFrame(() => {
+      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  async function cloneList(sourceId: string) {
+    setCloningId(sourceId);
+    try {
+      const copy = await api.cloneList(sourceId);
+      setLists((p) => [...p, copy]);
+      setActiveId(copy.id);
+      onError(null);
+      scrollToEditor();
+    } catch {
+      onError(t(lang, "persistFail"));
+    } finally {
+      setCloningId(null);
+    }
   }
 
   async function mutate(p: Promise<CandidateList>) {
@@ -726,12 +773,15 @@ function Lists({
 
   return (
     <section className="route-lists">
-      <AppHeading title={t(lang, "lists")} intro={t(lang, "listsIntro")} />
-      <div className="create-row">
-        <button className="primary" onClick={() => setShowCreateList(true)}>
-          {t(lang, "newList")}
-        </button>
-      </div>
+      <AppHeading
+        title={t(lang, "lists")}
+        intro={t(lang, "listsIntro")}
+        action={
+          <button className="primary" onClick={() => setShowCreateList(true)}>
+            {t(lang, "newList")}
+          </button>
+        }
+      />
       {showCreateList && (
         <Modal titleId="list-create-title" onClose={closeCreateList}>
           <dialog aria-labelledby="list-create-title">
@@ -781,7 +831,7 @@ function Lists({
                 {l.entries.length} {t(lang, "candidates")}
               </span>
             </div>
-            <div className="review-candidates">
+            <div className="review-candidates" tabIndex={0} aria-label={t(lang, "entries")}>
               {l.entries.map((cid) => (
                 <img
                   key={cid}
@@ -795,11 +845,18 @@ function Lists({
             <div className="battle-entry-actions">
               <button
                 className="secondary small-btn"
-                onClick={() => setActiveId(l.id)}
+                onClick={() => {
+                  setActiveId(l.id);
+                  scrollToEditor();
+                }}
               >
                 {t(lang, "selectList")}
               </button>
-              <button className="quiet" onClick={() => onUseList(l.id)}>
+              <button
+                className="quiet"
+                disabled={cloningId === l.id}
+                onClick={() => cloneList(l.id)}
+              >
                 {t(lang, "useList")}
               </button>
               <button className="quiet" onClick={() => setConfirmArchiveId(l.id)}>
@@ -811,7 +868,7 @@ function Lists({
       </div>
       {lists.length === 0 && <p className="empty">{t(lang, "noLists")}</p>}
       {active && (
-        <div className="split">
+        <div className="split" ref={editorRef}>
           <CatalogPane
             lang={lang}
             candidates={candidates}
@@ -939,8 +996,6 @@ function AuctionWorkspace({
   lang,
   candidates,
   onError,
-  presetSource,
-  onPresetUsed,
   view,
   onOpenDraft,
   onBackToAuctions,
@@ -949,8 +1004,6 @@ function AuctionWorkspace({
   lang: Lang;
   candidates: Candidate[];
   onError: (m: string | null) => void;
-  presetSource: string | null;
-  onPresetUsed: () => void;
   view: "auctions" | "draft";
   onOpenDraft: () => void;
   onBackToAuctions: () => void;
@@ -972,8 +1025,7 @@ function AuctionWorkspace({
   const [draftStep, setDraftStep] = useState<number>(0);
   const active = auctions.find((a) => a.id === activeId) ?? null;
   const draftEntryIds = active ? active.entries : [];
-  const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, (found) =>
-    onCandidates([...candidates, ...found.filter((c) => !candidates.some((x) => x.id === c.id))]));
+  const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, () => {});
   const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
   const editingDraftName =
     (editingId ? candidates.find((c) => c.id === editingId)?.name : undefined) ??
@@ -1008,13 +1060,6 @@ function AuctionWorkspace({
       })
       .catch(() => onError(t(lang, "persistFail")));
   }, [lang, onError]);
-
-  useEffect(() => {
-    if (presetSource) {
-      setSourceId(presetSource);
-      onPresetUsed();
-    }
-  }, [presetSource, onPresetUsed]);
 
   useEffect(() => {
     if (lists.length === 0) return;
@@ -1144,11 +1189,6 @@ function AuctionWorkspace({
                   {active.entries.length} {t(lang, "candidates")}
                 </p>
               </div>
-              <div className="header-tools">
-                <button className="quiet" onClick={onBackToAuctions}>
-                  {t(lang, "auctions")}
-                </button>
-              </div>
             </div>
             <Steps lang={lang} current={draftStep} onSelect={setDraftStep} />
             {draftStep === 0 ? (
@@ -1162,11 +1202,6 @@ function AuctionWorkspace({
                     );
                   }}
                 />
-                <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 34px 20px" }}>
-                  <button onClick={() => setDraftStep(1)}>
-                    {t(lang, "stepList")} &rarr;
-                  </button>
-                </div>
               </div>
             ) : draftStep === 1 ? (
               <>
@@ -1185,13 +1220,6 @@ function AuctionWorkspace({
                     onClick={() => mutate(api.renameAuction(active.id, rename))}
                   >
                     {t(lang, "rename")}
-                  </button>
-                  <button
-                    className="secondary"
-                    onClick={() => setDraftStep(0)}
-                    style={{ marginLeft: "auto" }}
-                  >
-                    &larr; {t(lang, "stepBattle")}
                   </button>
                 </div>
                 <div className="split">
@@ -1228,14 +1256,6 @@ function AuctionWorkspace({
                       resolveName={resolveDraftName}
                     />
                   </section>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", padding: "0 34px 20px" }}>
-                  <button className="secondary" onClick={() => setDraftStep(0)}>
-                    &larr; {t(lang, "stepBattle")}
-                  </button>
-                  <button onClick={() => setDraftStep(2)}>
-                    {t(lang, "stepTeams")} &rarr;
-                  </button>
                 </div>
               </>
             ) : draftStep === 2 ? (
@@ -1278,12 +1298,15 @@ function AuctionWorkspace({
 
   return (
     <section className="route-home">
-      <AppHeading title={t(lang, "homeTitle")} intro={t(lang, "homeIntro")} />
-      <div className="create-row">
-        <button className="primary" onClick={() => setShowCreateDraft(true)}>
-          {t(lang, "createDraft")}
-        </button>
-      </div>
+      <AppHeading
+        title={t(lang, "homeTitle")}
+        intro={t(lang, "homeIntro")}
+        action={
+          <button className="primary" onClick={() => setShowCreateDraft(true)}>
+            {t(lang, "createDraft")}
+          </button>
+        }
+      />
       {showCreateDraft && (
         <Modal titleId="draft-create-title" onClose={closeCreateDraft}>
           <dialog aria-labelledby="draft-create-title">
@@ -1416,10 +1439,9 @@ function AuctionWorkspace({
 
 export default function App() {
   const [lang, setL] = useState<Lang>(() => getLang());
-  const [tab, setTab] = useState<Tab>("auctions");
+  const [tab, setTab] = useState<Tab>(() => readTabFromUrl());
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [presetSource, setPresetSource] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -1429,14 +1451,25 @@ export default function App() {
       .catch(() => setError(t(lang, "persistFail")));
   }, [lang]);
 
+  useEffect(() => {
+    function onPopState() {
+      setTab(readTabFromUrl());
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  function navigateToTab(next: Tab) {
+    if (next === tab) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", next);
+    window.history.pushState(null, "", url);
+    setTab(next);
+  }
+
   function switchLang(l: Lang) {
     setL(l);
     setLang(l);
-  }
-
-  function goDraft(sourceId: string) {
-    setPresetSource(sourceId);
-    setTab("draft");
   }
 
   return (
@@ -1455,46 +1488,55 @@ export default function App() {
             </div>
           </div>
           <div className="header-tools">
-            <label>
-              {t(lang, "language")}{" "}
-              <select
-                aria-label={t(lang, "language")}
-                value={lang}
-                onChange={(e) => switchLang(e.target.value as Lang)}
+            <div className="lang-switch" role="group" aria-label={t(lang, "language")}>
+              <button
+                type="button"
+                aria-label="Türkçe"
+                title="Türkçe"
+                aria-pressed={lang === "tr"}
+                onClick={() => switchLang("tr")}
               >
-                <option value="tr">Türkçe</option>
-                <option value="en">English</option>
-              </select>
-            </label>
+                <span aria-hidden="true">🇹🇷</span>
+              </button>
+              <button
+                type="button"
+                aria-label="English"
+                title="English"
+                aria-pressed={lang === "en"}
+                onClick={() => switchLang("en")}
+              >
+                <span aria-hidden="true">🇬🇧</span>
+              </button>
+            </div>
           </div>
         </header>
         <nav className="app-nav">
           <button
-            onClick={() => setTab("auctions")}
+            onClick={() => navigateToTab("auctions")}
             aria-current={tab === "auctions" ? "page" : undefined}
           >
             {t(lang, "auctions")}
           </button>
           <button
-            onClick={() => setTab("catalog")}
+            onClick={() => navigateToTab("catalog")}
             aria-current={tab === "catalog" ? "page" : undefined}
           >
             {t(lang, "catalog")}
           </button>
           <button
-            onClick={() => setTab("lists")}
+            onClick={() => navigateToTab("lists")}
             aria-current={tab === "lists" ? "page" : undefined}
           >
             {t(lang, "lists")}
           </button>
           <button
-            onClick={() => setTab("battlefields")}
+            onClick={() => navigateToTab("battlefields")}
             aria-current={tab === "battlefields" ? "page" : undefined}
           >
             {t(lang, "battlefields")}
           </button>
           <button
-            onClick={() => setTab("draft")}
+            onClick={() => navigateToTab("draft")}
             aria-current={tab === "draft" ? "page" : undefined}
           >
             {t(lang, "currentDraft")}
@@ -1515,7 +1557,6 @@ export default function App() {
               candidates={candidates}
               onCandidates={setCandidates}
               onError={setError}
-              onUseList={goDraft}
             />
           ) : tab === "battlefields" ? (
             <BattlefieldLibrary lang={lang} />
@@ -1524,11 +1565,9 @@ export default function App() {
               lang={lang}
               candidates={candidates}
               onError={setError}
-              presetSource={presetSource}
-              onPresetUsed={() => setPresetSource(null)}
               view={tab === "draft" ? "draft" : "auctions"}
-              onOpenDraft={() => setTab("draft")}
-              onBackToAuctions={() => setTab("auctions")}
+              onOpenDraft={() => navigateToTab("draft")}
+              onBackToAuctions={() => navigateToTab("auctions")}
               onCandidates={setCandidates}
             />
           )}
@@ -1537,7 +1576,6 @@ export default function App() {
           <p>{t(lang, "footerNote")}</p>
         </footer>
       </div>
-      <p className="bottom-note">{t(lang, "footerNote")}</p>
     </div>
   );
 }
