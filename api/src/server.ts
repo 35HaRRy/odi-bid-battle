@@ -24,6 +24,7 @@ function toHttp(err: unknown): { status: number; body: string } {
     msg === "auction not found"
   )
     return { status: 404, body: "not found" };
+  if (msg === "only drafts can be deleted") return { status: 409, body: "only drafts can be deleted" };
   return { status: 500, body: "persistence failed" };
 }
 const upload = multer({
@@ -250,6 +251,16 @@ export function buildApp(store: PgStore): express.Express {
   app.get("/auctions/:id", async (req, res) => {
     try {
       res.json(await store.getAuction(req.params.id));
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.delete("/auctions/:id", async (req, res) => {
+    try {
+      await store.deleteDraftAuction(req.params.id);
+      res.status(204).end();
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
