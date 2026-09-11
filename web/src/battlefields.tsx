@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { api, type BattlefieldSummary, type Auction } from "./api";
 import { t, type Lang } from "./i18n";
+import { Modal } from "./modal";
 
 export function BattlefieldEditor({
   lang,
@@ -33,10 +34,9 @@ export function BattlefieldEditor({
   }, [file]);
 
   return (
+    <Modal titleId="battlefield-editor-title" onClose={onClose}>
     <dialog
-      open
       aria-labelledby="battlefield-editor-title"
-      onClose={onClose}
       style={{
         background: "var(--page)",
         border: "1px solid var(--line)",
@@ -132,6 +132,7 @@ export function BattlefieldEditor({
         </div>
       </form>
     </dialog>
+    </Modal>
   );
 }
 
@@ -139,6 +140,7 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
   const [battlefields, setBattlefields] = useState<BattlefieldSummary[]>([]);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<BattlefieldSummary | null | boolean>(false);
+  const [pendingArchive, setPendingArchive] = useState<BattlefieldSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -197,16 +199,7 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
                 </button>
                 <button
                   className="quiet"
-                  onClick={async () => {
-                    if (confirm(t(lang, "archiveTitle"))) {
-                      try {
-                        await api.archiveBattlefield(b.id);
-                        await load();
-                      } catch {
-                        setError(t(lang, "persistFail"));
-                      }
-                    }
-                  }}
+                  onClick={() => setPendingArchive(b)}
                 >
                   {t(lang, "archive")}
                 </button>
@@ -231,6 +224,36 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
             await load();
           }}
         />
+      )}
+
+      {pendingArchive && (
+        <Modal titleId="battlefield-archive-title" onClose={() => setPendingArchive(null)}>
+          <dialog aria-labelledby="battlefield-archive-title">
+            <h2 id="battlefield-archive-title">{t(lang, "archiveTitle")}</h2>
+            <p>{t(lang, "archiveText")}</p>
+            <div className="dialog-actions">
+              <button type="button" className="secondary" autoFocus onClick={() => setPendingArchive(null)}>
+                {t(lang, "cancel")}
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={async () => {
+                  const target = pendingArchive;
+                  setPendingArchive(null);
+                  try {
+                    await api.archiveBattlefield(target.id);
+                    await load();
+                  } catch {
+                    setError(t(lang, "persistFail"));
+                  }
+                }}
+              >
+                {t(lang, "archive")}
+              </button>
+            </div>
+          </dialog>
+        </Modal>
       )}
     </div>
   );

@@ -9,6 +9,14 @@
 }
 .table-scroll {
   overflow: auto;
+  max-height: 680px;
+  overflow-y: auto;
+}
+.auction-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  z-index: 1;
 }
 .list-library {
   display: grid;
@@ -24,6 +32,33 @@
 .list-entry[aria-current="true"] {
   outline: 2px solid var(--green);
   outline-offset: -2px;
+}
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: #2d2118aa;
+  overflow-y: auto;
+}
+.modal-box {
+  width: min(540px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+.modal-box dialog {
+  display: block;
+  position: static;
+  width: 100%;
+  max-height: none;
+  margin: 0;
+}
+.modal-form {
+  display: grid;
+  gap: 17px;
 }
 .create-row {
   display: flex;

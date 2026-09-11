@@ -45,7 +45,7 @@ export interface AuctionRecord {
 }
 
 type Queryable = {
-  query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+  query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
 };
 
 function pgError(message: string, cause: unknown): PersistenceError {

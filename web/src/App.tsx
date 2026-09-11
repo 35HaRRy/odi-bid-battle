@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
+import { Modal } from "./modal";
 import { BattlefieldLibrary, BattlefieldPreparation } from "./battlefields";
 import { DraftTeams } from "./draft-teams";
 import { DraftReview } from "./draft-review";
@@ -89,52 +90,54 @@ function CandidateEditDialog({
   const [name, setName] = useState(initialName);
   const [file, setFile] = useState<File | null>(null);
   return (
-    <dialog open aria-labelledby="editor-title" onClose={onClose}>
-      <form
-        method="dialog"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (name.trim()) onSave(name, file);
-        }}
-      >
-        <h2 id="editor-title">{title}</h2>
-        <p className="description">{description}</p>
-        <div className="dialog-fields">
-          <label>
-            <span>{t(lang, "candidateName")}</span>
-            <input
-              aria-label={t(lang, "candidateName")}
-              value={name}
-              maxLength={200}
-              required
-              autoFocus
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>{t(lang, "candidateImage")}</span>
-            <input
-              aria-label={t(lang, "candidateImage")}
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-          </label>
-          <div className="dialog-preview">
-            <img src={previewUrl} alt="" />
+    <Modal titleId="editor-title" onClose={onClose}>
+      <dialog aria-labelledby="editor-title">
+        <form
+          method="dialog"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) onSave(name, file);
+          }}
+        >
+          <h2 id="editor-title">{title}</h2>
+          <p className="description">{description}</p>
+          <div className="dialog-fields">
+            <label>
+              <span>{t(lang, "candidateName")}</span>
+              <input
+                aria-label={t(lang, "candidateName")}
+                value={name}
+                maxLength={200}
+                required
+                autoFocus
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>{t(lang, "candidateImage")}</span>
+              <input
+                aria-label={t(lang, "candidateImage")}
+                type="file"
+                accept="image/*"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <div className="dialog-preview">
+              <img src={previewUrl} alt="" />
+            </div>
+            <p className="description">{t(lang, "keepImage")}</p>
           </div>
-          <p className="description">{t(lang, "keepImage")}</p>
-        </div>
-        <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            {t(lang, "cancel")}
-          </button>
-          <button type="submit" className="primary">
-            {t(lang, "save")}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <div className="dialog-actions">
+            <button type="button" className="secondary" onClick={onClose}>
+              {t(lang, "cancel")}
+            </button>
+            <button type="submit" className="primary">
+              {t(lang, "save")}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </Modal>
   );
 }
 
@@ -156,22 +159,24 @@ function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <dialog open aria-labelledby="app-dialog-title" onClose={onCancel}>
-      <h2 id="app-dialog-title">{title}</h2>
-      <p>{body}</p>
-      <div className="dialog-actions">
-        <button type="button" className="secondary" onClick={onCancel} autoFocus>
-          {t(lang, "cancel")}
-        </button>
-        <button
-          type="button"
-          className={danger ? "danger" : "primary"}
-          onClick={onConfirm}
-        >
-          {confirmLabel}
-        </button>
-      </div>
-    </dialog>
+    <Modal titleId="app-dialog-title" onClose={onCancel}>
+      <dialog aria-labelledby="app-dialog-title">
+        <h2 id="app-dialog-title">{title}</h2>
+        <p>{body}</p>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={onCancel} autoFocus>
+            {t(lang, "cancel")}
+          </button>
+          <button
+            type="button"
+            className={danger ? "danger" : "primary"}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </dialog>
+    </Modal>
   );
 }
 
@@ -386,6 +391,7 @@ function Catalog({
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
   const q = search.toLocaleLowerCase(lang);
   const shown = items.filter((c) =>
     c.name.toLocaleLowerCase(lang).includes(q),
@@ -399,10 +405,17 @@ function Catalog({
       onItems([...items, c]);
       setName("");
       setFile(null);
+      setShowCreate(false);
       onError(null);
     } catch {
       onError(t(lang, "persistFail"));
     }
+  }
+
+  function closeCreate() {
+    setShowCreate(false);
+    setName("");
+    setFile(null);
   }
 
   async function archive(id: string) {
@@ -456,28 +469,58 @@ function Catalog({
         </span>
       </div>
       <div className="create-row">
-        <label>
-          {t(lang, "name")}
-          <input
-            aria-label={t(lang, "name")}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t(lang, "newCandidate")}
-          />
-        </label>
-        <label>
-          {t(lang, "image")}
-          <input
-            aria-label={t(lang, "image")}
-            type="file"
-            accept="image/*"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
-        </label>
-        <button className="primary" onClick={create}>
-          {t(lang, "create")}
+        <button className="primary" onClick={() => setShowCreate(true)}>
+          {t(lang, "newCandidate")}
         </button>
       </div>
+      {showCreate && (
+        <Modal titleId="candidate-create-title" onClose={closeCreate}>
+          <dialog aria-labelledby="candidate-create-title">
+            <form
+              method="dialog"
+              onSubmit={(e) => {
+                e.preventDefault();
+                create();
+              }}
+            >
+              <h2 id="candidate-create-title">{t(lang, "newCandidate")}</h2>
+              <p className="description">{t(lang, "newCandidateDescription")}</p>
+              <div className="modal-form">
+                <label>
+                  {t(lang, "name")}
+                  <input
+                    aria-label={t(lang, "name")}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t(lang, "newCandidate")}
+                    maxLength={200}
+                    required
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  {t(lang, "image")}
+                  <input
+                    aria-label={t(lang, "image")}
+                    type="file"
+                    accept="image/*"
+                    required
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+              </div>
+              <div className="dialog-actions">
+                <button type="button" className="secondary" onClick={closeCreate}>
+                  {t(lang, "cancel")}
+                </button>
+                <button type="submit" className="primary">
+                  {t(lang, "create")}
+                </button>
+              </div>
+            </form>
+          </dialog>
+        </Modal>
+      )}
       <div className="full-catalog">
         {shown.map((c) => (
           <article className="candidate" key={c.id}>
@@ -545,6 +588,8 @@ function Lists({
   const [name, setName] = useState("");
   const [newName, setNewName] = useState("");
   const [newFile, setNewFile] = useState<File | null>(null);
+  const [showCreateList, setShowCreateList] = useState(false);
+  const [showCreateEntry, setShowCreateEntry] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingScope, setEditingScope] = useState<"entry" | "catalog">("entry");
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
@@ -574,9 +619,15 @@ function Lists({
       setLists((p) => [...p, l]);
       setActiveId(l.id);
       setName("");
+      setShowCreateList(false);
     } catch {
       onError(t(lang, "persistFail"));
     }
+  }
+
+  function closeCreateList() {
+    setShowCreateList(false);
+    setName("");
   }
 
   async function mutate(p: Promise<CandidateList>) {
@@ -598,10 +649,17 @@ function Lists({
       onCandidates([...candidates, c]);
       setNewName("");
       setNewFile(null);
+      setShowCreateEntry(false);
       await mutate(api.addEntry(active.id, c.id));
     } catch {
       onError(t(lang, "persistFail"));
     }
+  }
+
+  function closeCreateEntry() {
+    setShowCreateEntry(false);
+    setNewName("");
+    setNewFile(null);
   }
 
   async function confirmArchiveList() {
@@ -670,19 +728,46 @@ function Lists({
     <section className="route-lists">
       <AppHeading title={t(lang, "lists")} intro={t(lang, "listsIntro")} />
       <div className="create-row">
-        <label>
+        <button className="primary" onClick={() => setShowCreateList(true)}>
           {t(lang, "newList")}
-          <input
-            aria-label={t(lang, "name")}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t(lang, "newList")}
-          />
-        </label>
-        <button className="primary" onClick={createList}>
-          {t(lang, "saveList")}
         </button>
       </div>
+      {showCreateList && (
+        <Modal titleId="list-create-title" onClose={closeCreateList}>
+          <dialog aria-labelledby="list-create-title">
+            <form
+              method="dialog"
+              onSubmit={(e) => {
+                e.preventDefault();
+                createList();
+              }}
+            >
+              <h2 id="list-create-title">{t(lang, "newList")}</h2>
+              <div className="modal-form">
+                <label>
+                  {t(lang, "name")}
+                  <input
+                    aria-label={t(lang, "name")}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t(lang, "newList")}
+                    maxLength={200}
+                    autoFocus
+                  />
+                </label>
+              </div>
+              <div className="dialog-actions">
+                <button type="button" className="secondary" onClick={closeCreateList}>
+                  {t(lang, "cancel")}
+                </button>
+                <button type="submit" className="primary">
+                  {t(lang, "saveList")}
+                </button>
+              </div>
+            </form>
+          </dialog>
+        </Modal>
+      )}
       <div className="list-library">
         {lists.map((l) => (
           <section
@@ -747,28 +832,58 @@ function Lists({
             </div>
             <p className="source">{t(lang, "savedSource")}</p>
             <div className="create-row">
-              <label>
+              <button className="secondary" onClick={() => setShowCreateEntry(true)}>
                 {t(lang, "createAndAdd")}
-                <input
-                  aria-label={t(lang, "name")}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder={t(lang, "createAndAdd")}
-                />
-              </label>
-              <label>
-                {t(lang, "image")}
-                <input
-                  aria-label={t(lang, "image")}
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => setNewFile(e.target.files?.[0] ?? null)}
-                />
-              </label>
-              <button className="secondary" onClick={createAndAdd}>
-                {t(lang, "create")}
               </button>
             </div>
+            {showCreateEntry && (
+              <Modal titleId="entry-create-title" onClose={closeCreateEntry}>
+                <dialog aria-labelledby="entry-create-title">
+                  <form
+                    method="dialog"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      createAndAdd();
+                    }}
+                  >
+                    <h2 id="entry-create-title">{t(lang, "createAndAdd")}</h2>
+                    <p className="description">{t(lang, "newCandidateDescription")}</p>
+                    <div className="modal-form">
+                      <label>
+                        {t(lang, "name")}
+                        <input
+                          aria-label={t(lang, "name")}
+                          value={newName}
+                          onChange={(e) => setNewName(e.target.value)}
+                          placeholder={t(lang, "createAndAdd")}
+                          maxLength={200}
+                          required
+                          autoFocus
+                        />
+                      </label>
+                      <label>
+                        {t(lang, "image")}
+                        <input
+                          aria-label={t(lang, "image")}
+                          type="file"
+                          accept="image/*"
+                          required
+                          onChange={(e) => setNewFile(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                    </div>
+                    <div className="dialog-actions">
+                      <button type="button" className="secondary" onClick={closeCreateEntry}>
+                        {t(lang, "cancel")}
+                      </button>
+                      <button type="submit" className="primary">
+                        {t(lang, "create")}
+                      </button>
+                    </div>
+                  </form>
+                </dialog>
+              </Modal>
+            )}
             <OrderedEntries
               lang={lang}
               entries={active.entries}
@@ -848,6 +963,7 @@ function AuctionWorkspace({
   const [search, setSearch] = useState("");
   const [newName, setNewName] = useState("");
   const [sourceId, setSourceId] = useState("");
+  const [showCreateDraft, setShowCreateDraft] = useState(false);
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [rename, setRename] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -901,6 +1017,13 @@ function AuctionWorkspace({
   }, [presetSource, onPresetUsed]);
 
   useEffect(() => {
+    if (lists.length === 0) return;
+    setSourceId((prev) =>
+      prev && lists.some((l) => l.id === prev) ? prev : lists[0].id,
+    );
+  }, [lists]);
+
+  useEffect(() => {
     setRename(active?.name ?? "");
   }, [active?.id, active?.name]);
 
@@ -911,11 +1034,17 @@ function AuctionWorkspace({
       setActiveId(a.id);
       localStorage.setItem("obb-selected-auction", a.id);
       setNewName("");
+      setShowCreateDraft(false);
       onError(null);
       onOpenDraft();
     } catch {
       onError(t(lang, "persistFail"));
     }
+  }
+
+  function closeCreateDraft() {
+    setShowCreateDraft(false);
+    setNewName("");
   }
 
   function open(id: string) {
@@ -1151,34 +1280,60 @@ function AuctionWorkspace({
     <section className="route-home">
       <AppHeading title={t(lang, "homeTitle")} intro={t(lang, "homeIntro")} />
       <div className="create-row">
-        <label>
-          {t(lang, "draftName")}
-          <input
-            aria-label={t(lang, "draftName")}
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder={t(lang, "draftName")}
-          />
-        </label>
-        <label>
-          {t(lang, "fromList")}
-          <select
-            aria-label={t(lang, "fromList")}
-            value={sourceId}
-            onChange={(e) => setSourceId(e.target.value)}
-          >
-            <option value="">{t(lang, "fromList")}</option>
-            {lists.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name || t(lang, "draft")}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="primary" onClick={create}>
+        <button className="primary" onClick={() => setShowCreateDraft(true)}>
           {t(lang, "createDraft")}
         </button>
       </div>
+      {showCreateDraft && (
+        <Modal titleId="draft-create-title" onClose={closeCreateDraft}>
+          <dialog aria-labelledby="draft-create-title">
+            <form
+              method="dialog"
+              onSubmit={(e) => {
+                e.preventDefault();
+                create();
+              }}
+            >
+              <h2 id="draft-create-title">{t(lang, "createDraft")}</h2>
+              <div className="modal-form">
+                <label>
+                  {t(lang, "draftName")}
+                  <input
+                    aria-label={t(lang, "draftName")}
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder={t(lang, "draftName")}
+                    maxLength={200}
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  {t(lang, "fromList")}
+                  <select
+                    aria-label={t(lang, "fromList")}
+                    value={sourceId}
+                    onChange={(e) => setSourceId(e.target.value)}
+                  >
+                    {lists.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.name || t(lang, "draft")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="dialog-actions">
+                <button type="button" className="secondary" onClick={closeCreateDraft}>
+                  {t(lang, "cancel")}
+                </button>
+                <button type="submit" className="primary">
+                  {t(lang, "createDraft")}
+                </button>
+              </div>
+            </form>
+          </dialog>
+        </Modal>
+      )}
       <div className="home-filter">
         <input
           type="search"
