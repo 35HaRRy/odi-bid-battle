@@ -85,4 +85,16 @@ describe("pg auction persist/rehydrate", () => {
       await store.close();
     }
   }, 30000);
+
+  it("deletes drafts and refuses non-drafts", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const d = await store.saveAuction("Silinecek", null);
+      await store.deleteDraftAuction(d.id);
+      await expect(store.getAuction(d.id)).rejects.toThrow("auction not found");
+      await expect(store.deleteDraftAuction("missing-id")).rejects.toThrow("auction not found");
+    } finally {
+      await store.close();
+    }
+  }, 30000);
 });

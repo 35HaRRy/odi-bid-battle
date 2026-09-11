@@ -708,6 +708,19 @@ export class PgStore {
     }
   }
 
+  async deleteDraftAuction(id: string): Promise<void> {
+    try {
+      const r = await this.q.query("SELECT status FROM auctions WHERE id=$1", [id]);
+      const row = r.rows[0] as unknown as { status: string } | undefined;
+      if (!row) throw new Error("auction not found");
+      if (row.status !== "draft") throw new Error("only drafts can be deleted");
+      await this.q.query("DELETE FROM auctions WHERE id=$1", [id]);
+    } catch (err) {
+      if ((err as Error).message === "auction not found" || (err as Error).message === "only drafts can be deleted") throw err;
+      throw pgError("failed to delete auction", err);
+    }
+  }
+
   async setAuctionBattlefield(
     id: string,
     battlefieldId: string | null,
