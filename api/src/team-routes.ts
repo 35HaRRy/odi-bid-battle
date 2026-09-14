@@ -71,7 +71,8 @@ function parseTeams(body: unknown): { teams: AuctionTeam[]; errors: FieldError[]
     else if (name.length > 200) errors.push({ path: `${path}.name`, message: "team name too long" });
     const sloganRaw = t.slogan;
     const slogan = typeof sloganRaw === "string" ? sloganRaw : "";
-    if (slogan.length > 500) errors.push({ path: `${path}.slogan`, message: "slogan too long" });
+    if (!slogan.trim()) errors.push({ path: `${path}.slogan`, message: "slogan is required" });
+    else if (slogan.length > 500) errors.push({ path: `${path}.slogan`, message: "slogan too long" });
     if (t.position !== i) errors.push({ path: `${path}.position`, message: "team position must match its panel" });
     const flag = parseImage(t.flag, `${path}.flag`, errors, { required: true });
 
@@ -111,6 +112,12 @@ function parseTeams(body: unknown): { teams: AuctionTeam[]; errors: FieldError[]
       createdAt: new Date(0).toISOString(),
     };
   });
+  if (errors.length === 0) {
+    const totals = teams.map((team) => team.members.reduce((sum, m) => sum + m.initialGold, 0));
+    if (totals[0] !== totals[1]) {
+      errors.push({ path: "teams", message: "starting budgets must be equal" });
+    }
+  }
   return { teams, errors };
 }
 

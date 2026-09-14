@@ -253,6 +253,80 @@ function Steps({
   );
 }
 
+const DRAFT_STEP_KEYS = ["stepBattle", "stepList", "stepTeams", "stepReview"] as const;
+
+function DraftStepFooter({
+  lang,
+  step,
+  onGo,
+  teamsSaveRef,
+  teamsSaveDisabled,
+}: {
+  lang: Lang;
+  step: number;
+  onGo: (step: number) => void;
+  teamsSaveRef: { current: (() => void) | null };
+  teamsSaveDisabled: boolean;
+}) {
+  const prevName = step > 0 ? t(lang, DRAFT_STEP_KEYS[step - 1]) : null;
+  const nextName = step < 3 ? t(lang, DRAFT_STEP_KEYS[step + 1]) : null;
+  return (
+    <div className="footer draft-step-footer">
+      <div className="draft-foot-side left">
+        {step === 0 ? (
+          <p className="footer-note align-left nowrap">{t(lang, "footerNote")}</p>
+        ) : (
+          prevName && (
+            <button
+              type="button"
+              className="secondary small-btn step-nav"
+              onClick={() => onGo(step - 1)}
+              aria-label={prevName}
+            >
+              ← {prevName}
+            </button>
+          )
+        )}
+      </div>
+      <div className="draft-foot-center">
+        {step === 1 ? (
+          <p className="footer-note nowrap">{t(lang, "footerNote")}</p>
+        ) : step === 2 ? (
+          <button
+            type="button"
+            className="primary step-nav"
+            disabled={teamsSaveDisabled}
+            onClick={() => teamsSaveRef.current?.()}
+          >
+            {t(lang, "save")}
+          </button>
+        ) : null}
+      </div>
+      <div className="draft-foot-side right">
+        {step < 3 && nextName ? (
+          <button
+            type="button"
+            className="secondary small-btn step-nav"
+            onClick={() => onGo(step + 1)}
+            aria-label={nextName}
+          >
+            {nextName} →
+          </button>
+        ) : step === 3 ? (
+          <button
+            type="button"
+            className="primary step-nav"
+            disabled
+            title={t(lang, "startDisabledNote")}
+          >
+            {t(lang, "start")}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function CatalogPane({
   lang,
   candidates,
@@ -1032,6 +1106,8 @@ function AuctionWorkspace({
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletedNote, setDeletedNote] = useState(false);
   const [draftStep, setDraftStep] = useState<number>(0);
+  const teamsSaveRef = useRef<(() => void) | null>(null);
+  const [teamsSaveDisabled, setTeamsSaveDisabled] = useState(true);
   const active = auctions.find((a) => a.id === activeId) ?? null;
   const draftEntryIds = active ? active.entries : [];
   const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, () => {});
@@ -1271,7 +1347,8 @@ function AuctionWorkspace({
               <DraftTeams
                 lang={lang}
                 auction={active}
-                onNext={() => setDraftStep(3)}
+                saveRef={teamsSaveRef}
+                onSaveDisabled={setTeamsSaveDisabled}
               />
             ) : (
               <DraftReview
@@ -1287,6 +1364,13 @@ function AuctionWorkspace({
                 onGoStep={setDraftStep}
               />
             )}
+            <DraftStepFooter
+              lang={lang}
+              step={draftStep}
+              onGo={setDraftStep}
+              teamsSaveRef={teamsSaveRef}
+              teamsSaveDisabled={teamsSaveDisabled}
+            />
           </section>
         )}
         {active && editingId && (
@@ -1580,9 +1664,11 @@ export default function App() {
             />
           )}
         </main>
-        <footer className="footer">
-          <p>{t(lang, "footerNote")}</p>
-        </footer>
+        {tab === "draft" ? null : (
+          <footer className="footer">
+            <p>{t(lang, "footerNote")}</p>
+          </footer>
+        )}
       </div>
     </div>
   );

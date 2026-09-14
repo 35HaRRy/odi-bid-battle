@@ -29,10 +29,16 @@ function payload() {
         slogan: "Guc",
         position: 1,
         flag: FLAG,
-        members: [{ name: "Deniz", initialGold: 20, avatar: null }],
+        members: [{ name: "Deniz", initialGold: 10, avatar: null }],
       },
     ],
   };
+}
+
+function unequalPayload() {
+  const body = payload();
+  body.teams[1].members[0].initialGold = 20;
+  return body;
 }
 
 describe.sequential("Auction team HTTP routes", () => {
@@ -58,7 +64,7 @@ describe.sequential("Auction team HTTP routes", () => {
     await store.pool?.end();
   });
 
-  it("saves and reloads unequal drafts", async () => {
+  it("saves and reloads equal drafts", async () => {
     const auction = await (
       await fetch(`${base}/auctions`, {
         method: "POST",
@@ -85,6 +91,48 @@ describe.sequential("Auction team HTTP routes", () => {
     ]);
   });
 
+  it("rejects unequal budgets without saving", async () => {
+    const auction = await (
+      await fetch(`${base}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "E", sourceListId: null }),
+      })
+    ).json();
+
+    const res = await fetch(`${base}/auctions/${auction.id}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(unequalPayload()),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe("invalid teams");
+    expect(json.fieldErrors.some((f: { path: string }) => f.path === "teams")).toBe(true);
+  });
+
+  it("rejects empty slogan with field-level errors", async () => {
+    const auction = await (
+      await fetch(`${base}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "F", sourceListId: null }),
+      })
+    ).json();
+
+    const body = payload();
+    body.teams[0].slogan = "  ";
+    const res = await fetch(`${base}/auctions/${auction.id}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(
+      json.fieldErrors.some((f: { path: string }) => f.path === "teams[0].slogan"),
+    ).toBe(true);
+  });
   it("rejects zero gold with field-level errors", async () => {
     const auction = await (
       await fetch(`${base}/auctions`, {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type Auction, type TeamImagePayload } from "./api";
 import { t, type Lang } from "./i18n";
-import { parseGold, teamTotal } from "./team-format";
+import { parseGold, teamTotal, isTeamsFormValid } from "./team-format";
 
 interface ImageEdit extends TeamImagePayload {
   url: string;
@@ -61,11 +61,13 @@ function fileToImageEdit(file: File): Promise<ImageEdit> {
 export function DraftTeams({
   lang,
   auction,
-  onNext,
+  saveRef,
+  onSaveDisabled,
 }: {
   lang: Lang;
   auction: Auction;
-  onNext: () => void;
+  saveRef?: { current: (() => void) | null };
+  onSaveDisabled?: (disabled: boolean) => void;
 }) {
   const [teams, setTeams] = useState<TeamEdit[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -169,7 +171,7 @@ export function DraftTeams({
   }
 
   async function save() {
-    if (!teams || saving) return;
+    if (!teams || saving || !isTeamsFormValid(teams)) return;
     setSaving(true);
     setSaveError(null);
     setServerFields({});
@@ -209,7 +211,6 @@ export function DraftTeams({
         })),
       );
       setSavedNote(true);
-      onNext();
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
         const body = e.details as { fieldErrors?: { path: string; message: string }[] } | undefined;
@@ -225,11 +226,27 @@ export function DraftTeams({
     }
   }
 
+  const totals = teams ? teams.map(teamTotal) : [];
+  const equal = totals.length === 2 && totals[0] === totals[1];
+  const formValid = teams ? isTeamsFormValid(teams) : false;
+  const saveDisabled = saving || !formValid;
+
+  useEffect(() => {
+    if (saveRef) {
+      saveRef.current = teams
+        ? () => {
+            void save();
+          }
+        : null;
+    }
+  });
+
+  useEffect(() => {
+    onSaveDisabled?.(saveDisabled);
+  }, [saveDisabled, onSaveDisabled]);
+
   if (loadError) return <p className="empty">{loadError}</p>;
   if (!teams) return <p className="empty">…</p>;
-
-  const totals = teams.map(teamTotal);
-  const equal = totals[0] === totals[1];
 
   return (
     <section aria-label={t(lang, "stepTeams")}>
@@ -299,9 +316,11 @@ export function DraftTeams({
                   value={team.slogan}
                   maxLength={500}
                   aria-label={`${t(lang, "slogan")}: ${team.name}`}
+                  aria-invalid={!team.slogan.trim()}
                   placeholder={t(lang, "slogan")}
                   onChange={(e) => patchTeam(ti, { slogan: e.target.value })}
                 />
+                {!team.slogan.trim() && <span className="field-error">{t(lang, "sloganRequired")}</span>}
                 {!team.flag && <span className="field-error">{t(lang, "flagRequired")}</span>}
               </div>
             </div>
@@ -391,7 +410,7 @@ export function DraftTeams({
                   </div>
                 );
               })}
-              {team.members.length === 0 && <p className="empty">{t(lang, "noMembers")}</p>}
+              {team.members.length === 0 && <p className="field-error">{t(lang, "noMembers")}</p>}
             </div>
             <div className="team-end">
               <button type="button" className="secondary small-btn" onClick={() => patchTeam(ti, { members: [...team.members, blankMember()] })}>
@@ -415,11 +434,6 @@ export function DraftTeams({
         </p>
       )}
       {savedNote && <p className="save-note">{t(lang, "teamsSaved")}</p>}
-      <div className="footer-center">
-        <button type="button" className="primary" disabled={saving} onClick={() => void save()}>
-          {t(lang, "save")}
-        </button>
-      </div>
     </section>
   );
 }

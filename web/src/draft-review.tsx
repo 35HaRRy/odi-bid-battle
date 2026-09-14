@@ -196,9 +196,6 @@ export function DraftReview({
             <br />
             {t(lang, "lockText")}
           </p>
-          <button type="button" className="primary" disabled title={t(lang, "startDisabledNote")}>
-            {t(lang, "start")}
-          </button>
           <p className="description">{t(lang, "startDisabledNote")}</p>
         </aside>
       </div>

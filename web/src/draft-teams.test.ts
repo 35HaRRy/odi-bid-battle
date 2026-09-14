@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { t } from "./i18n";
 import { api } from "./api";
-import { parseGold, teamTotal } from "./team-format";
+import { parseGold, teamTotal, isTeamsFormValid } from "./team-format";
 
 describe("team preparation helpers", () => {
   it("accepts only positive integers as initial gold", () => {
@@ -54,6 +54,7 @@ describe("team preparation helpers", () => {
       "total",
       "invalidGold",
       "requiredName",
+      "sloganRequired",
       "optional",
       "noMembers",
       "flagRequired",
@@ -83,5 +84,51 @@ describe("team preparation helpers", () => {
   it("exposes auction team client methods", () => {
     expect(typeof api.getAuctionTeams).toBe("function");
     expect(typeof api.saveAuctionTeams).toBe("function");
+  });
+
+  it("gates save on fully valid teams including slogan and equal budgets", () => {
+    const flag = { marker: "flag" };
+    const valid = [
+      {
+        name: "Kuzey",
+        slogan: "Birlik",
+        flag,
+        members: [{ name: "Elif", goldText: "10" }],
+      },
+      {
+        name: "Guney",
+        slogan: "Guc",
+        flag,
+        members: [{ name: "Deniz", goldText: "10" }],
+      },
+    ];
+    expect(isTeamsFormValid(valid)).toBe(true);
+    // unequal budgets block save
+    expect(
+      isTeamsFormValid([
+        { ...valid[0], members: [{ name: "Elif", goldText: "10" }] },
+        { ...valid[1], members: [{ name: "Deniz", goldText: "20" }] },
+      ]),
+    ).toBe(false);
+    // empty slogan blocks save
+    expect(isTeamsFormValid([{ ...valid[0], slogan: "  " }, valid[1]])).toBe(false);
+    // missing flag blocks save
+    expect(isTeamsFormValid([{ ...valid[0], flag: null }, valid[1]])).toBe(false);
+    // empty members blocks save
+    expect(isTeamsFormValid([{ ...valid[0], members: [] }, valid[1]])).toBe(false);
+    // blank member name blocks save
+    expect(
+      isTeamsFormValid([
+        { ...valid[0], members: [{ name: "  ", goldText: "10" }] },
+        valid[1],
+      ]),
+    ).toBe(false);
+    // invalid gold blocks save
+    expect(
+      isTeamsFormValid([
+        { ...valid[0], members: [{ name: "Elif", goldText: "0" }] },
+        valid[1],
+      ]),
+    ).toBe(false);
   });
 });
