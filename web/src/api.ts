@@ -50,6 +50,15 @@ export interface BattlefieldSummary {
   history: string;
   archivedAt: string | null;
 }
+export interface DraftBattlefield {
+  auctionId: string;
+  battlefieldId: string;
+  name: string;
+  geography: string;
+  history: string;
+  hasCustomImage: boolean;
+  archivedAt: string | null;
+}
 export interface TeamImagePayload {
   data: string;
   mime: string;
@@ -99,6 +108,8 @@ export const api = {
   base: BASE,
   imageUrl: (id: string) => `${BASE}/candidates/${id}/image`,
   battlefieldImageUrl: (id: string) => `${BASE}/battlefields/${id}/image`,
+  draftBattlefieldImageUrl: (auctionId: string, rev = 0) =>
+    `${BASE}/auctions/${auctionId}/battlefield/image${rev ? `?r=${rev}` : ""}`,
   auctionBackgroundUrl: (id: string, rev = 0) =>
     `${BASE}/auctions/${id}/background${rev ? `?r=${rev}` : ""}`,
   async candidates(): Promise<Candidate[]> {
@@ -191,6 +202,12 @@ export const api = {
   },
   async archiveList(id: string): Promise<void> {
     await check(await fetch(`${BASE}/lists/${id}/archive`, { method: "POST" }));
+  },
+  async cloneList(id: string): Promise<CandidateList> {
+    const r = await check(
+      await fetch(`${BASE}/lists/${id}/clone`, { method: "POST" }),
+    );
+    return r.json();
   },
   async editListEntry(
     listId: string,
@@ -336,6 +353,27 @@ export const api = {
     await check(
       await fetch(`${BASE}/battlefields/${id}/archive`, { method: "POST" }),
     );
+  },
+  async getDraftBattlefield(auctionId: string): Promise<DraftBattlefield> {
+    const r = await check(await fetch(`${BASE}/auctions/${auctionId}/battlefield`));
+    return r.json();
+  },
+  async saveDraftBattlefield(
+    auctionId: string,
+    fields: { geography: string; history: string },
+    file: File | null,
+  ): Promise<DraftBattlefield> {
+    const fd = new FormData();
+    fd.append("geography", fields.geography);
+    fd.append("history", fields.history);
+    if (file) fd.append("image", file);
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/battlefield`, {
+        method: "POST",
+        body: fd,
+      }),
+    );
+    return r.json();
   },
   async setAuctionBattlefield(
     auctionId: string,

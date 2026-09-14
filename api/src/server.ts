@@ -42,7 +42,7 @@ function toImageInput(
 export function buildApp(store: PgStore): express.Express {
   const app = express();
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: "15mb" }));
   mountBattlefieldRoutes(app, store);
   mountTeamRoutes(app, store);
 
@@ -204,6 +204,16 @@ export function buildApp(store: PgStore): express.Express {
     }
   });
 
+  app.post("/lists/:id/clone", async (req, res) => {
+    try {
+      const rec = await store.cloneList(req.params.id);
+      res.status(201).json(rec);
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
   app.post(
     "/lists/:id/entries/:candidateId/edit",
     upload.single("image"),
@@ -351,6 +361,18 @@ export function buildApp(store: PgStore): express.Express {
       }
     },
   );
+
+  // Body-parser (entity.too.large) errors skip route handlers, so map them
+  // to JSON 413 instead of Express' default HTML error page.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const status = (err as { status?: number }).status;
+    const type = (err as { type?: string }).type;
+    if (status === 413 || type === "entity.too.large") {
+      return res.status(413).json({ error: "payload too large" });
+    }
+    return next(err);
+  });
 
   return app;
 }

@@ -16,6 +16,16 @@ export interface BattlefieldRecord extends BattlefieldFields {
 
 export type BattlefieldSummary = Omit<BattlefieldRecord, "image">;
 
+export interface DraftBattlefield {
+  auctionId: string;
+  battlefieldId: string;
+  name: string;
+  geography: string;
+  history: string;
+  hasCustomImage: boolean;
+  archivedAt: string | null;
+}
+
 interface BattlefieldRow extends BattlefieldFields {
   id: string;
   archived_at: Date | null;
@@ -143,8 +153,97 @@ export class BattlefieldStore {
       const auction = await this.lockDraft(client, auctionId);
       if (auction.battlefield_id === battlefieldId) return;
       if (battlefield?.archivedAt != null) throw new AssetError("battlefield archived");
-      await client.query("UPDATE auctions SET battlefield_id=$2, updated_at=now() WHERE id=$1", [auctionId, battlefieldId]);
+      // A different selection discards the previous draft's overrides; the shared
+      // battlefield record is never modified here.
+      await client.query(
+        "UPDATE auctions SET battlefield_id=$2, battlefield_geography=NULL, battlefield_history=NULL, battlefield_image=NULL, battlefield_image_mime=NULL, battlefield_image_name=NULL, updated_at=now() WHERE id=$1",
+        [auctionId, battlefieldId],
+      );
     });
+  }
+
+  async getDraftBattlefield(auctionId: string): Promise<DraftBattlefield | null> {
+    const result = await this.pool.query<{
+      battlefield_id: string | null;
+      battlefield_geography: string | null;
+      battlefield_history: string | null;
+      battlefield_image: Buffer | null;
+    }>(
+      "SELECT battlefield_id, battlefield_geography, battlefield_history, battlefield_image FROM auctions WHERE id=$1",
+      [auctionId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new AssetError("auction not found");
+    if (row.battlefield_id === null) return null;
+    const base = await this.get(row.battlefield_id);
+    return {
+      auctionId,
+      battlefieldId: base.id,
+      name: base.name,
+      geography: row.battlefield_geography ?? base.geography,
+      history: row.battlefield_history ?? base.history,
+      hasCustomImage: row.battlefield_image !== null,
+      archivedAt: base.archivedAt,
+    };
+  }
+
+  async saveDraftBattlefield(
+    auctionId: string,
+    fields: { geography: string; history: string },
+    image: AssetImage | undefined,
+  ): Promise<DraftBattlefield> {
+    const clean = validateBattlefield({ name: "draft", geography: fields.geography, history: fields.history });
+    if (image !== undefined) validateAssetImage(image);
+    return this.transaction(async (client) => {
+      const auction = await this.lockDraft(client, auctionId);
+      if (auction.battlefield_id === null) throw new AssetError("battlefield not found");
+      // Re-read the shared record for identity; overrides never touch it.
+      const baseResult = await client.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1", [auction.battlefield_id]);
+      if (!baseResult.rows[0]) throw new AssetError("battlefield not found");
+      const base = record(baseResult.rows[0]);
+      if (image !== undefined) {
+        await client.query(
+          "UPDATE auctions SET battlefield_geography=$2, battlefield_history=$3, battlefield_image=$4, battlefield_image_mime=$5, battlefield_image_name=$6, updated_at=now() WHERE id=$1",
+          [auctionId, clean.geography, clean.history, image.buffer, image.mime, image.name],
+        );
+      } else {
+        await client.query(
+          "UPDATE auctions SET battlefield_geography=$2, battlefield_history=$3, updated_at=now() WHERE id=$1",
+          [auctionId, clean.geography, clean.history],
+        );
+      }
+      const check = await client.query<{ battlefield_image: Buffer | null }>(
+        "SELECT battlefield_image FROM auctions WHERE id=$1", [auctionId],
+      );
+      return {
+        auctionId,
+        battlefieldId: base.id,
+        name: base.name,
+        geography: clean.geography,
+        history: clean.history,
+        hasCustomImage: check.rows[0].battlefield_image !== null,
+        archivedAt: base.archivedAt,
+      };
+    });
+  }
+
+  async getDraftBattlefieldImage(auctionId: string): Promise<AssetImage> {
+    const result = await this.pool.query<{
+      battlefield_id: string | null;
+      battlefield_image: Buffer | null;
+      battlefield_image_mime: string | null;
+      battlefield_image_name: string | null;
+    }>(
+      "SELECT battlefield_id, battlefield_image, battlefield_image_mime, battlefield_image_name FROM auctions WHERE id=$1",
+      [auctionId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new AssetError("auction not found");
+    if (row.battlefield_image !== null) {
+      return { buffer: Buffer.from(row.battlefield_image), mime: row.battlefield_image_mime!, name: row.battlefield_image_name! };
+    }
+    if (row.battlefield_id === null) throw new AssetError("battlefield not found");
+    return (await this.get(row.battlefield_id)).image;
   }
 
   async setBackground(auctionId: string, image: AssetImage | null): Promise<void> {

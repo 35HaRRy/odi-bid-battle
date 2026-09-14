@@ -196,6 +196,73 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
     }
   });
 
+  // GET /auctions/:id/battlefield (merged shared record + draft overrides)
+  app.get("/auctions/:id/battlefield", async (req, res) => {
+    try {
+      const draft = await store.battlefields.getDraftBattlefield(req.params.id);
+      if (!draft) return res.status(404).json({ error: "battlefield not found" });
+      res.setHeader("Cache-Control", "no-store");
+      res.json(draft);
+    } catch (e) {
+      if (e instanceof AssetError) {
+        const h = assetErrorHttp(e);
+        return res.status(h.status).json({ error: h.body });
+      }
+      res.status(404).json({ error: "auction not found" });
+    }
+  });
+
+  // POST /auctions/:id/battlefield (draft-scoped geography/history/image)
+  app.post("/auctions/:id/battlefield", (req, res) => {
+    upload.single("image")(req, res, async (err) => {
+      if (err) {
+        if (handleMulterError(err, res)) return;
+        return res.status(400).json({ error: "upload failed" });
+      }
+      try {
+        const { geography, history } = req.body ?? {};
+        if (geography === undefined && history === undefined && !req.file) {
+          return res.status(400).json({ error: "invalid geography" });
+        }
+        const current = await store.battlefields.getDraftBattlefield(req.params.id);
+        if (!current) return res.status(404).json({ error: "battlefield not found" });
+        const next = {
+          geography: geography !== undefined ? String(geography) : current.geography,
+          history: history !== undefined ? String(history) : current.history,
+        };
+        const imageInput = req.file
+          ? { buffer: req.file.buffer, mime: req.file.mimetype, name: req.file.originalname }
+          : undefined;
+        const updated = await store.battlefields.saveDraftBattlefield(req.params.id, next, imageInput);
+        res.setHeader("Cache-Control", "no-store");
+        res.json(updated);
+      } catch (e) {
+        if (e instanceof AssetError) {
+          const h = assetErrorHttp(e);
+          return res.status(h.status).json({ error: h.body });
+        }
+        res.status(404).json({ error: "auction not found" });
+      }
+    });
+  });
+
+  // GET /auctions/:id/battlefield/image (custom override or shared record)
+  app.get("/auctions/:id/battlefield/image", async (req, res) => {
+    try {
+      const image = await store.battlefields.getDraftBattlefieldImage(req.params.id);
+      res.setHeader("Content-Type", image.mime || "image/png");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", "no-store");
+      res.send(image.buffer);
+    } catch (e) {
+      if (e instanceof AssetError) {
+        const h = assetErrorHttp(e);
+        return res.status(h.status).json({ error: h.body });
+      }
+      res.status(404).json({ error: "battlefield not found" });
+    }
+  });
+
   // POST /auctions/:id/background
   app.post("/auctions/:id/background", (req, res) => {
     upload.single("image")(req, res, async (err) => {

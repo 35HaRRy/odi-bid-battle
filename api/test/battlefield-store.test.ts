@@ -311,6 +311,87 @@ describe("background persistence", () => {
   });
 });
 
+describe("draft battlefield overrides", () => {
+  it("merges shared record with draft text and image without touching the record", async () => {
+    const field = await assets.create(fields, image);
+    const draft = await store.saveAuction("Draft", null);
+    const other = await store.saveAuction("Other", null);
+    await assets.select(draft.id, field.id);
+    await assets.select(other.id, field.id);
+    expect(await assets.getDraftBattlefield(draft.id)).toEqual({
+      auctionId: draft.id,
+      battlefieldId: field.id,
+      name: field.name,
+      geography: fields.geography,
+      history: fields.history,
+      hasCustomImage: false,
+      archivedAt: null,
+    });
+    const updated = await assets.saveDraftBattlefield(
+      draft.id,
+      { geography: "Draft hills", history: "Draft saga" },
+      secondImage,
+    );
+    expect(updated).toMatchObject({
+      auctionId: draft.id,
+      battlefieldId: field.id,
+      name: field.name,
+      geography: "Draft hills",
+      history: "Draft saga",
+      hasCustomImage: true,
+    });
+    expect(await assets.get(field.id)).toEqual(field);
+    expect(await assets.getDraftBattlefield(other.id)).toMatchObject({
+      geography: fields.geography,
+      history: fields.history,
+      hasCustomImage: false,
+    });
+    expect(await assets.getDraftBattlefieldImage(draft.id)).toEqual(secondImage);
+    expect(await assets.getDraftBattlefieldImage(other.id)).toEqual(image);
+  });
+
+  it("clears overrides when the selection changes or is removed, keeps them on reselect", async () => {
+    const first = await assets.create(fields, image);
+    const second = await assets.create({ ...fields, name: "Second" }, image);
+    const draft = await store.saveAuction("Draft", null);
+    await assets.select(draft.id, first.id);
+    await assets.saveDraftBattlefield(draft.id, { geography: "Custom", history: "Custom past" }, secondImage);
+    // reselecting the same record keeps overrides (no-op selection)
+    await assets.select(draft.id, first.id);
+    expect(await assets.getDraftBattlefield(draft.id)).toMatchObject({ geography: "Custom", hasCustomImage: true });
+    await assets.select(draft.id, second.id);
+    expect(await assets.getDraftBattlefield(draft.id)).toMatchObject({
+      battlefieldId: second.id,
+      geography: fields.geography,
+      history: fields.history,
+      hasCustomImage: false,
+    });
+    expect(await assets.getDraftBattlefieldImage(draft.id)).toEqual(image);
+    await assets.select(draft.id, null);
+    expect(await assets.getDraftBattlefield(draft.id)).toBeNull();
+    await expect(assets.getDraftBattlefieldImage(draft.id)).rejects.toEqual(new AssetError("battlefield not found"));
+  });
+
+  it("rejects override writes without selection, with blank text, or for locked drafts", async () => {
+    const draft = await store.saveAuction("Draft", null);
+    await expect(assets.getDraftBattlefield(draft.id)).resolves.toBeNull();
+    await expect(assets.saveDraftBattlefield(draft.id, { geography: "G", history: "H" }, undefined))
+      .rejects.toEqual(new AssetError("battlefield not found"));
+    const field = await assets.create(fields, image);
+    await assets.select(draft.id, field.id);
+    await expect(assets.saveDraftBattlefield(draft.id, { geography: "  ", history: "H" }, undefined))
+      .rejects.toEqual(new AssetError("invalid geography"));
+    await expect(assets.saveDraftBattlefield(draft.id, { geography: "G", history: "H" }, { ...image, buffer: Buffer.from("bad") }))
+      .rejects.toEqual(new AssetError("invalid image"));
+    for (const status of ["ongoing", "completed"]) {
+      await pool.query("UPDATE auctions SET status=$2 WHERE id=$1", [draft.id, status]);
+      await expect(assets.saveDraftBattlefield(draft.id, { geography: "G", history: "H" }, undefined))
+        .rejects.toEqual(new AssetError("preparation locked"));
+    }
+    expect(await assets.getDraftBattlefield(draft.id)).toMatchObject({ geography: fields.geography });
+  });
+});
+
 describe("battlefield migration", () => {
   it("is repeatable and keeps existing rows and restrictive references", async () => {
     const field = await assets.create(fields, image);

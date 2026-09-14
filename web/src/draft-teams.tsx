@@ -61,12 +61,10 @@ function fileToImageEdit(file: File): Promise<ImageEdit> {
 export function DraftTeams({
   lang,
   auction,
-  onBack,
   onNext,
 }: {
   lang: Lang;
   auction: Auction;
-  onBack: () => void;
   onNext: () => void;
 }) {
   const [teams, setTeams] = useState<TeamEdit[] | null>(null);
@@ -75,6 +73,7 @@ export function DraftTeams({
   const [serverFields, setServerFields] = useState<Record<string, string>>({});
   const [savedNote, setSavedNote] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
   const flagInputs = useRef<(HTMLInputElement | null)[]>([]);
   const avatarInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -136,12 +135,22 @@ export function DraftTeams({
 
   async function chooseFlag(teamIndex: number, file: File | undefined) {
     if (!file) return;
-    patchTeam(teamIndex, { flag: await fileToImageEdit(file) });
+    try {
+      patchTeam(teamIndex, { flag: await fileToImageEdit(file) });
+      setImageError(null);
+    } catch {
+      setImageError(t(lang, "imageReadFail"));
+    }
   }
 
   async function chooseAvatar(teamIndex: number, key: string, file: File | undefined) {
     if (!file) return;
-    patchMember(teamIndex, key, { avatar: await fileToImageEdit(file) });
+    try {
+      patchMember(teamIndex, key, { avatar: await fileToImageEdit(file) });
+      setImageError(null);
+    } catch {
+      setImageError(t(lang, "imageReadFail"));
+    }
   }
 
   function transferMember(fromIndex: number, key: string) {
@@ -200,6 +209,7 @@ export function DraftTeams({
         })),
       );
       setSavedNote(true);
+      onNext();
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
         const body = e.details as { fieldErrors?: { path: string; message: string }[] } | undefined;
@@ -207,7 +217,9 @@ export function DraftTeams({
         for (const f of body?.fieldErrors ?? []) mapped[f.path] = f.message;
         setServerFields(mapped);
       }
-      setSaveError(t(lang, "persistFail"));
+      setSaveError(
+        e instanceof ApiError && e.status === 413 ? t(lang, "teamsTooLarge") : t(lang, "persistFail"),
+      );
     } finally {
       setSaving(false);
     }
@@ -254,6 +266,7 @@ export function DraftTeams({
                 type="button"
                 className="flag-button"
                 aria-label={`${t(lang, "flag")}: ${team.name}`}
+                title={team.flag ? t(lang, "changeImage") : t(lang, "uploadFlag")}
                 onClick={() => flagInputs.current[ti]?.click()}
               >
                 {team.flag ? <img src={team.flag.url} alt="" /> : "🏳"}
@@ -308,6 +321,7 @@ export function DraftTeams({
                       type="button"
                       className="avatar"
                       aria-label={`${m.name}: ${t(lang, "avatar")}`}
+                      title={m.avatar ? t(lang, "changeImage") : t(lang, "uploadAvatar")}
                       onClick={() => avatarInputs.current[m.key]?.click()}
                     >
                       {m.avatar ? <img src={m.avatar.url} alt="" /> : (m.name.charAt(0) || "•")}
@@ -390,21 +404,20 @@ export function DraftTeams({
           </section>
         ))}
       </div>
+      {imageError && (
+        <p className="field-error" role="alert">
+          {imageError}
+        </p>
+      )}
       {saveError && (
         <p className="field-error" role="alert">
           {saveError}
         </p>
       )}
       {savedNote && <p className="save-note">{t(lang, "teamsSaved")}</p>}
-      <div className="footer-left">
-        <button type="button" className="secondary" onClick={onBack}>
-          ← {t(lang, "stepList")}
-        </button>
-        <button type="button" className="quiet" disabled={saving} onClick={() => void save()}>
+      <div className="footer-center">
+        <button type="button" className="primary" disabled={saving} onClick={() => void save()}>
           {t(lang, "save")}
-        </button>
-        <button type="button" className="primary" onClick={onNext}>
-          {t(lang, "stepReview")} →
         </button>
       </div>
     </section>

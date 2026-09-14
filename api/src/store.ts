@@ -3,6 +3,7 @@ import { Pool, type PoolClient } from "pg";
 import { AssetError } from "./battlefield-domain.js";
 import { BattlefieldStore } from "./battlefield-store.js";
 import { TeamStore } from "./team-store.js";
+import { buildListCopyName } from "./domain.js";
 
 export class PersistenceError extends Error {
   constructor(message: string, opts?: { cause?: unknown }) {
@@ -106,6 +107,9 @@ export class PgStore {
         edit: (id, fields, image) => run(() => assets.edit(id, fields, image)),
         archive: (id) => run(() => assets.archive(id)),
         select: (auctionId, battlefieldId) => run(() => assets.select(auctionId, battlefieldId)),
+        getDraftBattlefield: (auctionId) => run(() => assets.getDraftBattlefield(auctionId)),
+        saveDraftBattlefield: (auctionId, fields, image) => run(() => assets.saveDraftBattlefield(auctionId, fields, image)),
+        getDraftBattlefieldImage: (auctionId) => run(() => assets.getDraftBattlefieldImage(auctionId)),
         setBackground: (auctionId, image) => run(() => assets.setBackground(auctionId, image)),
         getBackground: (auctionId) => run(() => assets.getBackground(auctionId)),
       };
@@ -287,6 +291,39 @@ export class PgStore {
     } catch (err) {
       throw pgError("failed to archive list", err);
     }
+  }
+
+  async cloneList(sourceId: string): Promise<CandidateListRecord> {
+    const source = await this.getList(sourceId);
+    if (source.archivedAt) throw new Error("list not found");
+    const name = buildListCopyName(source.name);
+    const id = randomUUID();
+    const pool = this.pool;
+    if (!pool || typeof (pool as Pool).connect !== "function") {
+      throw pgError("failed to clone list", new Error("no pool"));
+    }
+    let client: PoolClient | null = null;
+    try {
+      client = await (pool as Pool).connect();
+      await client.query("BEGIN");
+      await client.query(
+        "INSERT INTO candidate_lists (id, name, is_draft) VALUES ($1,$2,$3)",
+        [id, name, source.isDraft],
+      );
+      for (let i = 0; i < source.entries.length; i++) {
+        await client.query(
+          "INSERT INTO list_entries (list_id, candidate_id, position) VALUES ($1,$2,$3)",
+          [id, source.entries[i], i],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client?.query("ROLLBACK").catch(() => undefined);
+      throw pgError("failed to clone list", err);
+    } finally {
+      client?.release();
+    }
+    return (await this.getList(id)) as CandidateListRecord;
   }
 
   async isCandidateReferenced(id: string): Promise<boolean> {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type Auction, type BattlefieldSummary, type SavedTeam } from "./api";
+import { api, type Auction, type DraftBattlefield, type SavedTeam } from "./api";
 import { t, type Lang } from "./i18n";
+import { ImagePreview } from "./image-preview";
 
 interface Check {
   key: string;
@@ -26,7 +27,7 @@ export function DraftReview({
   onGoStep: (step: number) => void;
 }) {
   const [teams, setTeams] = useState<SavedTeam[] | null>(null);
-  const [battlefield, setBattlefield] = useState<BattlefieldSummary | null>(null);
+  const [battlefield, setBattlefield] = useState<DraftBattlefield | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,7 +42,7 @@ export function DraftReview({
       });
     if (battlefieldId) {
       api
-        .getBattlefield(battlefieldId)
+        .getDraftBattlefield(auction.id)
         .then((summary) => {
           if (!cancelled) setBattlefield(summary);
         })
@@ -119,7 +120,7 @@ export function DraftReview({
             </header>
             {battlefield ? (
               <div className="review-detail">
-                <img src={api.battlefieldImageUrl(battlefield.id)} alt="" />
+                <ImagePreview lang={lang} src={api.draftBattlefieldImageUrl(auction.id)} alt={battlefield.name} />
                 <div>
                   <strong>{battlefield.name}</strong>
                   <p>{battlefield.geography}</p>
@@ -141,7 +142,14 @@ export function DraftReview({
             </p>
             <div className="review-candidates" tabIndex={0} aria-label={t(lang, "stepList")}>
               {entries.map((id) => (
-                <img key={id} src={api.imageUrl(id)} alt={resolveName(id)} title={resolveName(id)} />
+                <ImagePreview
+                  key={id}
+                  lang={lang}
+                  src={api.imageUrl(id)}
+                  alt={resolveName(id)}
+                  enlargeLabel={resolveName(id)}
+                  className="image-preview compact"
+                />
               ))}
             </div>
           </section>

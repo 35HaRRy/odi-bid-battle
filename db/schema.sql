@@ -87,6 +87,11 @@ DROP FUNCTION IF EXISTS validate_team_balance();
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_image BYTEA;
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_mime TEXT;
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_name TEXT;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS battlefield_geography TEXT;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS battlefield_history TEXT;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS battlefield_image BYTEA;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS battlefield_image_mime TEXT;
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS battlefield_image_name TEXT;
 DO $$
 DECLARE
   missing_ids TEXT;

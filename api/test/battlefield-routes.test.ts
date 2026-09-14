@@ -121,6 +121,43 @@ describe.sequential("Battlefield & Background HTTP Routes", () => {
     expect(revertRes.headers.get("content-type")).toContain("svg");
   });
 
+  it("serves merged draft battlefield and draft image without editing the shared record", async () => {
+    const auction = await store.saveAuction("Draft Routes", null);
+    expect((await fetch(`${base}/auctions/${auction.id}/battlefield`)).status).toBe(404);
+
+    const create = new FormData();
+    create.set("name", "Rocky Valley");
+    create.set("geography", "High cliffs");
+    create.set("history", "Old pass");
+    create.set("image", new Blob([VALID_PNG], { type: "image/png" }), "valley.png");
+    const created = await (await fetch(`${base}/battlefields`, { method: "POST", body: create })).json();
+
+    const selRes = await fetch(`${base}/auctions/${auction.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ battlefieldId: created.id }),
+    });
+    expect(selRes.status).toBe(200);
+
+    const merged = await (await fetch(`${base}/auctions/${auction.id}/battlefield`)).json();
+    expect(merged).toMatchObject({ battlefieldId: created.id, geography: "High cliffs", hasCustomImage: false });
+
+    const override = new FormData();
+    override.set("geography", "Draft hills");
+    override.set("history", "Draft saga");
+    override.set("image", new Blob([VALID_PNG], { type: "image/png" }), "draft.png");
+    const saveRes = await fetch(`${base}/auctions/${auction.id}/battlefield`, { method: "POST", body: override });
+    expect(saveRes.status).toBe(200);
+    expect(await saveRes.json()).toMatchObject({ geography: "Draft hills", history: "Draft saga", hasCustomImage: true });
+
+    const imgRes = await fetch(`${base}/auctions/${auction.id}/battlefield/image`);
+    expect(imgRes.status).toBe(200);
+    expect(Buffer.from(await imgRes.arrayBuffer())).toEqual(VALID_PNG);
+
+    const shared = await (await fetch(`${base}/battlefields/${created.id}`)).json();
+    expect(shared).toMatchObject({ geography: "High cliffs", history: "Old pass" });
+  });
+
   it("returns 404 for non-existent battlefield or auction", async () => {
     const res = await fetch(`${base}/battlefields/nonexistent-id/image`);
     expect(res.status).toBe(404);

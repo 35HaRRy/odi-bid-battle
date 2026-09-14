@@ -12,6 +12,12 @@
   max-height: 680px;
   overflow-y: auto;
 }
+.full-catalog-scroll {
+  overflow: auto;
+  max-height: 860px;
+  scrollbar-gutter: stable;
+  padding-right: 5px;
+}
 .auction-table thead th {
   position: sticky;
   top: 0;
@@ -23,6 +29,8 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 26px;
   margin-bottom: 30px;
+  max-height: 530px;
+  overflow-y: auto;
 }
 .list-entry {
   border: 1px solid var(--line);
@@ -32,6 +40,34 @@
 .list-entry[aria-current="true"] {
   outline: 2px solid var(--green);
   outline-offset: -2px;
+}
+.list-entry .review-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 49px);
+  gap: 7px;
+  justify-content: start;
+  align-content: start;
+  max-height: 194px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+.battle-library {
+  max-height: 530px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-right: 5px;
+  margin-bottom: 30px;
+}
+.battle-select-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+  max-height:320px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-right: 5px;
 }
 .modal-overlay {
   position: fixed;
@@ -70,8 +106,176 @@
 .create-row label {
   min-width: 200px;
 }
+.image-field {
+  display: grid;
+  gap: 8px;
+}
+.image-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+.image-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  background: #e9ddbe;
+  border: 1px solid var(--line);
+  padding: 0;
+  width: 100%;
+  cursor: zoom-in;
+}
+.image-preview img {
+  width: 100%;
+  height: 140px;
+  object-fit: contain;
+  display: block;
+}
+.image-preview.compact img {
+  height: 58px;
+}
+.image-broken {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 12px;
+  color: var(--muted);
+}
+.image-broken svg {
+  width: 30px;
+  height: 30px;
+  flex: none;
+}
+.list-entry .review-candidates .image-preview.list-thumb .image-broken {
+  padding: 4px;
+}
+.list-entry .review-candidates .image-preview.list-thumb .image-broken svg {
+  width: 20px;
+  height: 20px;
+}
+.image-status-row {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.image-status.error {
+  color: var(--red);
+}
+.image-dialog {
+  max-width: min(1100px, 96vw);
+}
+.image-full {
+  width: 100%;
+  max-height: 86vh;
+  object-fit: contain;
+  background: #e9ddbe;
+  border: 1px solid var(--line);
+}
+.modal-overlay.nested {
+  z-index: 80;
+}
+/* Enlarge popup keeps its frame; the picture inside is shown larger. */
+.modal-overlay.nested .modal-box:has(.image-dialog) {
+  width: min(1100px, 96vw);
+}
+/* Ordered-list thumbnails keep the original 42x48 cells. */
+.ordered-item .image-preview.ordered-thumb {
+  min-height: 0;
+  width: 42px;
+  height: 48px;
+  padding: 3px;
+  background: #e4d6b5;
+  border: 1px solid var(--line);
+  flex: none;
+}
+.ordered-item .image-preview.ordered-thumb img {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+/* Catalog cards keep the original 120px frame. */
+.image-preview.card-embed {
+  min-height: 0;
+  height: 120px;
+  background: #e4d6b5;
+  border: 1px solid var(--line);
+  padding: 0;
+}
+.image-preview.card-embed img {
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+}
+/* List-box thumbnails keep the original 49x58 grid cells. */
+.list-entry .review-candidates .image-preview.list-thumb {
+  min-height: 0;
+  width: 49px;
+  height: 58px;
+  padding: 4px;
+  background: #e4d6b5;
+  border: 0;
+  flex: none;
+}
+.list-entry .review-candidates .image-preview.list-thumb img {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+/* Preserve the original fixed-size frames; only the click-to-enlarge is new. */
+.map-wrap .image-preview.map-embed {
+  min-height: 0;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.map-wrap .image-preview.map-embed img {
+  height: 100%;
+}
+.bg-box {
+  width: 150px;
+  height: 90px;
+  background: #e9ddbe;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.bg-box .image-preview.bg-embed {
+  min-height: 0;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.bg-box .image-preview.bg-embed img {
+  height: 100%;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
 @media (max-width: 800px) {
   .list-library {
+    grid-template-columns: 1fr;
+  }
+  .full-catalog-scroll {
+    max-height: 660px;
+  }
+  .battle-layout {
     grid-template-columns: 1fr;
   }
 }

@@ -18,6 +18,14 @@ describe("battlefield client and i18n", () => {
       "changeBackground",
       "resetBackground",
       "battlefieldIntro",
+      "battleTitle",
+      "battleSubtitle",
+      "geographyFeatures",
+      "historyPast",
+      "firstHalfBackground",
+      "changeImage",
+      "editTexts",
+      "selectedBattlefield",
     ]) {
       expect(t("tr", key)).not.toBe(key);
       expect(t("en", key)).not.toBe(key);
@@ -26,6 +34,7 @@ describe("battlefield client and i18n", () => {
 
   it("constructs correct battlefield and background URLs", () => {
     expect(api.battlefieldImageUrl("bf-1")).toContain("/battlefields/bf-1/image");
+    expect(api.draftBattlefieldImageUrl("auc-1")).toContain("/auctions/auc-1/battlefield/image");
     expect(api.auctionBackgroundUrl("auc-1")).toContain("/auctions/auc-1/background");
     expect(api.auctionBackgroundUrl("auc-1", 2)).toContain("/auctions/auc-1/background?r=2");
   });

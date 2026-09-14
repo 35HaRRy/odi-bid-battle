@@ -1030,6 +1030,12 @@ img {
     align-items: center
 }
 
+.footer-center {
+    display: flex;
+    justify-content: center;
+    margin-top: 24px
+}
+
 .footer p {
     font-size: 11px;
     color: var(--muted)

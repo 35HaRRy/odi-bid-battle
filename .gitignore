@@ -3,3 +3,4 @@ dist/
 *.local
 
 __pycache__/
+.playwright-*/

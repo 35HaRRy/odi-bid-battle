@@ -33,6 +33,11 @@ export function createCandidateList(
   return { id: randomUUID(), name, entries: [], isDraft: draft };
 }
 
+export function buildListCopyName(sourceName: string): string {
+  const base = sourceName.trim() || "Taslak";
+  return `${base} — Kopya`.slice(0, 200);
+}
+
 export function addEntry(list: CandidateList, candidateId: string): void {
   if (list.entries.includes(candidateId)) throw new Error("duplicate entry");
   list.entries.push(candidateId);

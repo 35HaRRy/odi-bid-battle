@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
 import { Modal } from "./modal";
+import { ImageField } from "./image-field";
+import { ImagePreview } from "./image-preview";
 import { BattlefieldLibrary, BattlefieldPreparation } from "./battlefields";
 import { DraftTeams } from "./draft-teams";
 import { DraftReview } from "./draft-review";
@@ -135,18 +137,17 @@ function CandidateEditDialog({
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
-            <label>
-              <span>{t(lang, "candidateImage")}</span>
-              <input
-                aria-label={t(lang, "candidateImage")}
-                type="file"
-                accept="image/*"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-            </label>
-            <div className="dialog-preview">
-              <img src={previewUrl} alt="" />
-            </div>
+            <ImageField
+              lang={lang}
+              label={t(lang, "candidateImage")}
+              accept="image/*"
+              file={file}
+              savedSrc={previewUrl}
+              savedAlt={name}
+              unsaved
+              emptyLabel={t(lang, "noImage")}
+              onSelect={setFile}
+            />
             <p className="description">{t(lang, "keepImage")}</p>
           </div>
           <div className="dialog-actions">
@@ -293,9 +294,12 @@ function CatalogPane({
         <div className="catalog-grid">
           {shown.map((c) => (
             <article className="candidate" key={c.id}>
-              <div className="candidate-image">
-                <img src={api.imageUrl(c.id)} alt={c.name} />
-              </div>
+              <ImagePreview
+                lang={lang}
+                src={api.imageUrl(c.id)}
+                alt={resolveName ? resolveName(c.id) : c.name}
+                className="candidate-image card-embed"
+              />
               <h4>{resolveName ? resolveName(c.id) : c.name}</h4>
               <div className="candidate-controls">
                 <button
@@ -354,7 +358,7 @@ function OrderedEntries({
       {entries.map((cid, idx) => (
         <li className="ordered-item" key={cid}>
           <span className="order-number">{idx + 1}</span>
-          <img src={api.imageUrl(cid)} alt="" />
+          <ImagePreview lang={lang} src={api.imageUrl(cid)} alt={label(cid)} enlargeLabel={label(cid)} className="ordered-thumb" />
           <span className="ordered-name">{label(cid)}</span>
           <div className="ordered-actions">
             {onEdit && (
@@ -523,16 +527,16 @@ function Catalog({
                     autoFocus
                   />
                 </label>
-                <label>
-                  {t(lang, "image")}
-                  <input
-                    aria-label={t(lang, "image")}
-                    type="file"
-                    accept="image/*"
-                    required
-                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
+                <ImageField
+                  lang={lang}
+                  label={t(lang, "image")}
+                  accept="image/*"
+                  file={file}
+                  savedSrc={null}
+                  savedAlt={name}
+                  emptyLabel={t(lang, "noImage")}
+                  onSelect={setFile}
+                />
               </div>
               <div className="dialog-actions">
                 <button type="button" className="secondary" onClick={closeCreate}>
@@ -550,9 +554,12 @@ function Catalog({
         <div className="full-catalog">
           {shown.map((c) => (
             <article className="candidate" key={c.id}>
-              <div className="candidate-image">
-                <img src={api.imageUrl(c.id)} alt={c.name} />
-              </div>
+              <ImagePreview
+                lang={lang}
+                src={api.imageUrl(c.id)}
+                alt={c.name}
+                className="candidate-image card-embed"
+              />
               <h4>{c.name}</h4>
               <div className="candidate-controls">
                 <button
@@ -833,11 +840,13 @@ function Lists({
             </div>
             <div className="review-candidates" tabIndex={0} aria-label={t(lang, "entries")}>
               {l.entries.map((cid) => (
-                <img
+                <ImagePreview
                   key={cid}
+                  lang={lang}
                   src={api.imageUrl(cid)}
                   alt={resolveName(cid)}
-                  title={resolveName(cid)}
+                  enlargeLabel={resolveName(cid)}
+                  className="list-thumb"
                 />
               ))}
             </div>
@@ -918,16 +927,16 @@ function Lists({
                           autoFocus
                         />
                       </label>
-                      <label>
-                        {t(lang, "image")}
-                        <input
-                          aria-label={t(lang, "image")}
-                          type="file"
-                          accept="image/*"
-                          required
-                          onChange={(e) => setNewFile(e.target.files?.[0] ?? null)}
-                        />
-                      </label>
+                      <ImageField
+                        lang={lang}
+                        label={t(lang, "image")}
+                        accept="image/*"
+                        file={newFile}
+                        savedSrc={null}
+                        savedAlt={newName}
+                        emptyLabel={t(lang, "noImage")}
+                        onSelect={setNewFile}
+                      />
                     </div>
                     <div className="dialog-actions">
                       <button type="button" className="secondary" onClick={closeCreateEntry}>
@@ -1262,7 +1271,6 @@ function AuctionWorkspace({
               <DraftTeams
                 lang={lang}
                 auction={active}
-                onBack={() => setDraftStep(1)}
                 onNext={() => setDraftStep(3)}
               />
             ) : (
