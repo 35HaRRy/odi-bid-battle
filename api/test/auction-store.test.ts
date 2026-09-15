@@ -5,6 +5,10 @@ import { addTeamMember, createAuctionTeam } from "../src/domain.js";
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgres://bidbattle:bidbattle@localhost:5433/bidbattle";
+const PNG = Buffer.from(
+  "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000179a489740000000049454e44ae426082",
+  "hex",
+);
 
 describe("auction store failure surface", () => {
   it("surfaces persistence failure as PersistenceError", async () => {
@@ -20,6 +24,82 @@ describe("auction store failure surface", () => {
 });
 
 describe("pg auction persist/rehydrate", () => {
+  it("clones preparation into an editable draft without live auction state", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const candidates = [];
+      for (let i = 0; i < 4; i++) {
+        candidates.push(await store.saveCandidate(
+          i === 0 ? "Archived candidate" : `Candidate ${i}`,
+          PNG,
+          "image/png",
+          `candidate-${i}.png`,
+        ));
+      }
+      const list = await store.saveList("Source list", false);
+      for (const candidate of candidates) await store.addEntryToList(list.id, candidate.id);
+      await store.archiveCandidate(candidates[0].id);
+      expect((await store.listCandidates()).map((candidate) => candidate.id)).not.toContain(candidates[0].id);
+      const source = await store.saveAuction("Source auction", list.id);
+      const field = await store.battlefields.create(
+        { name: "Field", geography: "Valley", history: "Old road" },
+        { buffer: PNG, mime: "image/png", name: "field.png" },
+      );
+      await store.battlefields.select(source.id, field.id);
+      await store.battlefields.setBackground(source.id, {
+        buffer: PNG,
+        mime: "image/png",
+        name: "background.png",
+      });
+      const flag = { buffer: PNG, mime: "image/png", name: "flag.png" };
+      const first = createAuctionTeam(source.id, "First", 0, { flag, slogan: "One" });
+      const second = createAuctionTeam(source.id, "Second", 1, { flag, slogan: "Two" });
+      addTeamMember(first, "A", 10);
+      addTeamMember(second, "B", 10);
+      await store.teams.saveAuctionTeams(source.id, [first, second]);
+      await store.startAuction(source.id);
+      await store.live.sendNext(source.id);
+      await store.live.confirmBid(source.id, 0, [3]);
+      await store.live.sell(source.id);
+
+      const clone = await store.cloneAuction(source.id, "Cloned auction");
+
+      expect(clone.id).not.toBe(source.id);
+      expect(clone.name).toBe("Cloned auction");
+      expect(clone.status).toBe("draft");
+      expect(clone.followsSource).toBe(false);
+      expect(clone.entries).toEqual(candidates.map((candidate) => candidate.id));
+      expect(clone.battlefieldId).toBe(field.id);
+      expect((await store.battlefields.getBackground(clone.id))?.buffer).toEqual(PNG);
+      expect((await store.getAuction(source.id)).status).toBe("ongoing");
+      expect((await store.getAuction(source.id)).entries).toEqual(candidates.map((candidate) => candidate.id));
+
+      const clonedTeams = await store.teams.getAuctionTeams(clone.id);
+      expect(clonedTeams.map((team) => team.name)).toEqual(["First", "Second"]);
+      expect(clonedTeams.every((team) => team.auctionId === clone.id)).toBe(true);
+      expect(clonedTeams[0].members[0].initialGold).toBe(10);
+
+      await expect(store.live.getLive(clone.id)).rejects.toThrow("auction not started");
+      for (const table of [
+        "auction_live_state",
+        "auction_live_balances",
+        "auction_live_contributions",
+        "auction_live_latest",
+        "auction_live_skipped",
+        "auction_live_acquired",
+        "auction_live_history",
+      ]) {
+        const rows = await store.pool!.query(
+          `SELECT COUNT(*)::int AS count FROM ${table} WHERE auction_id=$1`,
+          [clone.id],
+        );
+        expect(rows.rows[0].count, table).toBe(0);
+      }
+    } finally {
+      await store.close();
+    }
+  }, 30000);
+
   it("creates drafts from lists, follows until fork, renames independently, resumes after restart", async () => {
     const store = await PgStore.connect(DATABASE_URL);
     try {

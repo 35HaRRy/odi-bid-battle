@@ -668,6 +668,142 @@ export class PgStore {
     }
   }
 
+  async cloneAuction(sourceId: string, name = ""): Promise<AuctionRecord> {
+    if (name.length > 200) throw new Error("invalid name");
+    const pool = this.pool;
+    if (!pool || typeof (pool as Pool).connect !== "function") {
+      throw pgError("failed to clone auction", new Error("no pool"));
+    }
+    const client = await (pool as Pool).connect();
+    const cloneId = randomUUID();
+    try {
+      await client.query("BEGIN");
+      const sourceResult = await client.query(
+        `SELECT id, name, source_list_id, follows_source, battlefield_id,
+                battlefield_geography, battlefield_history, battlefield_image,
+                battlefield_image_mime, battlefield_image_name, background_image,
+                background_mime, background_name
+         FROM auctions WHERE id=$1 FOR UPDATE`,
+        [sourceId],
+      );
+      const source = sourceResult.rows[0] as {
+        id: string;
+        name: string;
+        source_list_id: string | null;
+        follows_source: boolean;
+        battlefield_id: string | null;
+        battlefield_geography: string | null;
+        battlefield_history: string | null;
+        battlefield_image: Buffer | null;
+        battlefield_image_mime: string | null;
+        battlefield_image_name: string | null;
+        background_image: Buffer | null;
+        background_mime: string | null;
+        background_name: string | null;
+      } | undefined;
+      if (!source) throw new Error("auction not found");
+
+      const entriesResult = source.follows_source && source.source_list_id
+        ? await client.query(
+            "SELECT candidate_id FROM list_entries WHERE list_id=$1 ORDER BY position",
+            [source.source_list_id],
+          )
+        : await client.query(
+            "SELECT candidate_id FROM auction_entries WHERE auction_id=$1 ORDER BY position",
+            [sourceId],
+          );
+      const entries = (entriesResult.rows as { candidate_id: string }[]).map(
+        (row) => row.candidate_id,
+      );
+
+      await client.query(
+        `INSERT INTO auctions (
+           id, name, source_list_id, follows_source, battlefield_id,
+           battlefield_geography, battlefield_history, battlefield_image,
+           battlefield_image_mime, battlefield_image_name, background_image,
+           background_mime, background_name, status
+         ) VALUES ($1,$2,NULL,false,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft')`,
+        [
+          cloneId,
+          name,
+          source.battlefield_id,
+          source.battlefield_geography,
+          source.battlefield_history,
+          source.battlefield_image,
+          source.battlefield_image_mime,
+          source.battlefield_image_name,
+          source.background_image,
+          source.background_mime,
+          source.background_name,
+        ],
+      );
+      for (let position = 0; position < entries.length; position++) {
+        await client.query(
+          "INSERT INTO auction_entries (auction_id, candidate_id, position) VALUES ($1,$2,$3)",
+          [cloneId, entries[position], position],
+        );
+      }
+
+      const teams = await client.query(
+        `SELECT id, name, slogan, flag_image, flag_mime, flag_name, position
+         FROM auction_teams WHERE auction_id=$1 ORDER BY position, created_at, id`,
+        [sourceId],
+      );
+      for (const team of teams.rows as {
+        id: string;
+        name: string;
+        slogan: string | null;
+        flag_image: Buffer;
+        flag_mime: string;
+        flag_name: string;
+        position: number;
+      }[]) {
+        const cloneTeamId = randomUUID();
+        await client.query(
+          `INSERT INTO auction_teams
+             (id, auction_id, name, slogan, flag_image, flag_mime, flag_name, position)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [cloneTeamId, cloneId, team.name, team.slogan, team.flag_image, team.flag_mime, team.flag_name, team.position],
+        );
+        const members = await client.query(
+          `SELECT name, avatar_image, avatar_mime, avatar_name, initial_gold
+           FROM auction_team_members WHERE team_id=$1 ORDER BY created_at, id`,
+          [team.id],
+        );
+        for (const member of members.rows as {
+          name: string;
+          avatar_image: Buffer | null;
+          avatar_mime: string | null;
+          avatar_name: string | null;
+          initial_gold: number;
+        }[]) {
+          await client.query(
+            `INSERT INTO auction_team_members
+               (id, team_id, name, avatar_image, avatar_mime, avatar_name, initial_gold)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [randomUUID(), cloneTeamId, member.name, member.avatar_image, member.avatar_mime, member.avatar_name, member.initial_gold],
+          );
+        }
+      }
+      await client.query("COMMIT");
+      return {
+        id: cloneId,
+        name,
+        sourceListId: null,
+        followsSource: false,
+        entries,
+        battlefieldId: source.battlefield_id,
+        status: "draft",
+      };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if ((err as Error).message === "auction not found") throw err;
+      throw pgError("failed to clone auction", err);
+    } finally {
+      client.release();
+    }
+  }
+
   async listAuctions(): Promise<AuctionRecord[]> {
     try {
       const r = await this.q.query(

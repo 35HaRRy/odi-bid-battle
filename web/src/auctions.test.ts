@@ -81,4 +81,28 @@ describe("auction drafts i18n", () => {
       globalThis.fetch = orig;
     }
   });
+
+  it("posts a clone request with the user-authored name", async () => {
+    const orig = globalThis.fetch;
+    let seen: unknown;
+    // @ts-expect-error test stub intentionally narrows fetch inputs.
+    globalThis.fetch = async (url: string, init?: RequestInit) => {
+      expect(url).toContain("/auctions/auc-1/clone");
+      expect(init?.method).toBe("POST");
+      seen = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ id: "clone-1", name: "My copy", status: "draft" }), { status: 201 });
+    };
+    try {
+      const clone = await api.cloneAuction("auc-1", "My copy");
+      expect(seen).toEqual({ name: "My copy" });
+      expect(clone.status).toBe("draft");
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("has clone labels in both languages", () => {
+    expect(t("tr", "cloneAuction")).not.toBe("cloneAuction");
+    expect(t("en", "cloneAuction")).not.toBe("cloneAuction");
+  });
 });

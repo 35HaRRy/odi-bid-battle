@@ -283,6 +283,16 @@ export const api = {
     );
     return r.json();
   },
+  async cloneAuction(id: string, name: string): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${id}/clone`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }),
+    );
+    return r.json();
+  },
   async getAuction(id: string): Promise<Auction> {
     const r = await check(await fetch(`${BASE}/auctions/${id}`));
     return r.json();

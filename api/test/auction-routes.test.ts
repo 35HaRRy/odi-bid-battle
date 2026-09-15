@@ -30,3 +30,40 @@ describe.sequential("DELETE /auctions/:id", () => {
     expect((await fetch(`${base}/auctions/missing`, { method: "DELETE" })).status).toBe(404);
   });
 });
+
+describe.sequential("POST /auctions/:id/clone", () => {
+  let store: PgStore; let server: Server; let base: string;
+  beforeEach(async () => {
+    store = await PgStore.connect(process.env.DATABASE_URL ?? "postgres://bidbattle:bidbattle@localhost:5433/bidbattle");
+    const app = buildApp(store);
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const addr = server.address();
+    if (addr && typeof addr === "object") base = `http://127.0.0.1:${addr.port}`;
+  });
+  afterEach(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    await store.pool?.end();
+  });
+
+  it("creates a named draft from a stored auction", async () => {
+    const source = await store.saveAuction("Source", null);
+    const response = await fetch(`${base}/auctions/${source.id}/clone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Copy" }),
+    });
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      name: "Copy",
+      status: "draft",
+      followsSource: false,
+    });
+  });
+
+  it("returns 404 when the source auction is missing", async () => {
+    const response = await fetch(`${base}/auctions/missing/clone`, { method: "POST" });
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "not found" });
+  });
+});

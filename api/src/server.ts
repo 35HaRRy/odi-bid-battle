@@ -255,6 +255,16 @@ export function buildApp(store: PgStore): express.Express {
     }
   });
 
+  app.post("/auctions/:id/clone", async (req, res) => {
+    try {
+      const name = String(req.body?.name ?? "");
+      res.status(201).json(await store.cloneAuction(req.params.id, name));
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
   app.get("/auctions", async (_req, res) => {
     try {
       res.json(await store.listAuctions());

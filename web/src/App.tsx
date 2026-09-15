@@ -1116,6 +1116,9 @@ function AuctionWorkspace({
   const [rename, setRename] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [cloneSourceId, setCloneSourceId] = useState<string | null>(null);
+  const [cloneName, setCloneName] = useState("");
+  const [clonePending, setClonePending] = useState(false);
   const [deletedNote, setDeletedNote] = useState(false);
   const [draftStep, setDraftStep] = useState<number>(0);
   const teamsSaveRef = useRef<(() => void) | null>(null);
@@ -1232,6 +1235,36 @@ function AuctionWorkspace({
       onError(null);
     } catch {
       onError(t(lang, "persistFail"));
+    }
+  }
+
+  function openClone(id: string) {
+    setCloneSourceId(id);
+    setCloneName("");
+  }
+
+  function closeClone() {
+    if (clonePending) return;
+    setCloneSourceId(null);
+    setCloneName("");
+  }
+
+  async function confirmClone() {
+    if (!cloneSourceId || clonePending) return;
+    setClonePending(true);
+    try {
+      const clone = await api.cloneAuction(cloneSourceId, cloneName);
+      setAuctions((ls) => [clone, ...ls.filter((auction) => auction.id !== clone.id)]);
+      setActiveId(clone.id);
+      localStorage.setItem("obb-selected-auction", clone.id);
+      setCloneSourceId(null);
+      setCloneName("");
+      onError(null);
+      onOpenDraft();
+    } catch {
+      onError(t(lang, "persistFail"));
+    } finally {
+      setClonePending(false);
     }
   }
 
@@ -1530,6 +1563,42 @@ function AuctionWorkspace({
           </dialog>
         </Modal>
       )}
+      {cloneSourceId && (
+        <Modal titleId="auction-clone-title" onClose={closeClone}>
+          <dialog aria-labelledby="auction-clone-title">
+            <form
+              method="dialog"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void confirmClone();
+              }}
+            >
+              <h2 id="auction-clone-title">{t(lang, "cloneAuction")}</h2>
+              <div className="modal-form">
+                <label>
+                  {t(lang, "draftName")}
+                  <input
+                    aria-label={t(lang, "draftName")}
+                    value={cloneName}
+                    onChange={(e) => setCloneName(e.target.value)}
+                    maxLength={200}
+                    autoFocus
+                    disabled={clonePending}
+                  />
+                </label>
+              </div>
+              <div className="dialog-actions">
+                <button type="button" className="secondary" onClick={closeClone} disabled={clonePending}>
+                  {t(lang, "cancel")}
+                </button>
+                <button type="submit" className="primary" disabled={clonePending}>
+                  {clonePending ? "..." : t(lang, "cloneAuction")}
+                </button>
+              </div>
+            </form>
+          </dialog>
+        </Modal>
+      )}
       <div className="home-filter">
         <input
           type="search"
@@ -1570,6 +1639,9 @@ function AuctionWorkspace({
                       onClick={() => open(a.id)}
                     >
                       {t(lang, a.status === "draft" ? "openDraft" : "resume")}
+                    </button>
+                    <button className="secondary small-btn" onClick={() => openClone(a.id)}>
+                      {t(lang, "cloneAuction")}
                     </button>
                     {a.status === "draft" && (
                       <button className="secondary small-btn" onClick={() => setPendingDeleteId(a.id)}>
