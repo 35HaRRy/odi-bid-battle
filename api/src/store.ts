@@ -179,11 +179,12 @@ export class PgStore {
       this.liveRepository = {
         getLive: (auctionId) => run(() => live.getLive(auctionId)),
         sendNext: (auctionId) => run(() => live.sendNext(auctionId)),
-        confirmBid: (auctionId, team, contributions) =>
-          run(() => live.confirmBid(auctionId, team, contributions)),
-        pass: (auctionId) => run(() => live.pass(auctionId)),
-        sell: (auctionId) => run(() => live.sell(auctionId)),
+        confirmBid: (auctionId, team, contributions, drafts) =>
+          run(() => live.confirmBid(auctionId, team, contributions, drafts)),
+        pass: (auctionId, drafts) => run(() => live.pass(auctionId, drafts)),
+        sell: (auctionId, drafts) => run(() => live.sell(auctionId, drafts)),
         endAuction: (auctionId) => run(() => live.endAuction(auctionId)),
+        undo: (auctionId) => run(() => live.undo(auctionId)),
       };
     }
     return this.liveRepository;

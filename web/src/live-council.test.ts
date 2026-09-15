@@ -56,6 +56,13 @@ describe("live council entry", () => {
       "endNotReady",
       "auctionEnded",
       "passError",
+      "undo",
+      "battleInfo",
+      "fullscreen",
+      "firstHalf",
+      "secondHalf",
+      "undoDone",
+      "nothingToUndo",
     ]) {
       expect(t("tr", k)).not.toBe(k);
       expect(t("en", k)).not.toBe(k);
@@ -73,6 +80,7 @@ describe("live council entry", () => {
     expect(typeof api.passCandidate).toBe("function");
     expect(typeof api.completeSale).toBe("function");
     expect(typeof api.endAuction).toBe("function");
+    expect(typeof api.undoLiveAction).toBe("function");
   });
 
   it("calls POST /auctions/:id/start", async () => {
@@ -170,6 +178,25 @@ describe("live council entry", () => {
     try {
       const res = await api.completeSale("auc-1");
       expect(res.active).toBe(false);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("posts undo to /auctions/:id/live/undo", async () => {
+    const orig = globalThis.fetch;
+    // @ts-expect-error stub
+    globalThis.fetch = async (url: string, init?: RequestInit) => {
+      expect(String(url)).toContain("/auctions/auc-1/live/undo");
+      expect(init?.method).toBe("POST");
+      return new Response(JSON.stringify({ active: true, cursor: 0, canUndo: false }), {
+        status: 200,
+      });
+    };
+    try {
+      const res = await api.undoLiveAction("auc-1");
+      expect(res.active).toBe(true);
+      expect(res.canUndo).toBe(false);
     } finally {
       globalThis.fetch = orig;
     }

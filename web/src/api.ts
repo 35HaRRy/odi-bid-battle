@@ -128,6 +128,7 @@ export interface LiveState {
   skipped: string[];
   capacity: number;
   readyToEnd: boolean;
+  canUndo: boolean;
   teams: LiveTeam[];
 }
 
@@ -473,31 +474,52 @@ export const api = {
     auctionId: string,
     team: 0 | 1,
     contributions: number[],
+    drafts?: number[][],
   ): Promise<LiveState> {
     const r = await check(
       await fetch(`${BASE}/auctions/${auctionId}/live/bids`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ team, contributions }),
+        body: JSON.stringify({ team, contributions, drafts }),
       }),
     );
     return r.json();
   },
-  async passCandidate(auctionId: string): Promise<LiveState> {
+  async passCandidate(
+    auctionId: string,
+    drafts?: number[][],
+  ): Promise<LiveState> {
     const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/pass`, { method: "POST" }),
+      await fetch(`${BASE}/auctions/${auctionId}/live/pass`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drafts }),
+      }),
     );
     return r.json();
   },
-  async completeSale(auctionId: string): Promise<LiveState> {
+  async completeSale(
+    auctionId: string,
+    drafts?: number[][],
+  ): Promise<LiveState> {
     const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/sale`, { method: "POST" }),
+      await fetch(`${BASE}/auctions/${auctionId}/live/sale`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drafts }),
+      }),
     );
     return r.json();
   },
   async endAuction(auctionId: string): Promise<LiveState> {
     const r = await check(
       await fetch(`${BASE}/auctions/${auctionId}/live/end`, { method: "POST" }),
+    );
+    return r.json();
+  },
+  async undoLiveAction(auctionId: string): Promise<LiveState> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/live/undo`, { method: "POST" }),
     );
     return r.json();
   },

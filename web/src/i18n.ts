@@ -225,6 +225,13 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     noImage: "Görsel yok",
     uploadFlag: "Takım bayrağı yükle",
     uploadAvatar: "Üye fotoğrafı ekle",
+    undo: "Son işlemi geri al",
+    battleInfo: "Savaş alanı bilgileri",
+    fullscreen: "Tam ekran",
+    firstHalf: "İlk yarı",
+    secondHalf: "İkinci yarı",
+    undoDone: "Son işlem geri alındı.",
+    nothingToUndo: "Geri alınacak işlem yok.",
   },
   en: {
     catalog: "Candidate Catalog",
@@ -450,6 +457,13 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     noImage: "No image",
     uploadFlag: "Upload team flag",
     uploadAvatar: "Add member photo",
+    undo: "Undo last action",
+    battleInfo: "Battlefield information",
+    fullscreen: "Full screen",
+    firstHalf: "First half",
+    secondHalf: "Second half",
+    undoDone: "Last action undone.",
+    nothingToUndo: "No action to undo.",
   },
 };
 

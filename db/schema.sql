@@ -162,4 +162,16 @@ CREATE TABLE IF NOT EXISTS auction_live_acquired (
   PRIMARY KEY (auction_id, candidate_id)
 );
 
+-- Undo history (issue #11): strict reverse-order snapshots of the latest
+-- confirmed live action. Each entry stores the full pre-action live state so
+-- undo restores round, drafts, balances, acquisitions, skips, and status
+-- together without touching preparation tables.
+CREATE TABLE IF NOT EXISTS auction_live_history (
+  id SERIAL PRIMARY KEY,
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  snapshot JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_live_history_auction ON auction_live_history(auction_id, id);
+
 COMMIT;

@@ -27,6 +27,7 @@ export function emptyLiveRound(teams: { id: string; members: unknown[] }[]): {
 }
 
 function errorKey(message: string): string | null {
+  if (/nothing to undo/.test(message)) return "nothingToUndo";
   if (/bid must|exceed|positive/.test(message)) return "bidError";
   if (/contribution/.test(message)) return "contributionError";
   if (/not your turn/.test(message)) return "notYourTurn";
@@ -142,11 +143,15 @@ export function LiveCouncil({
   }
 
   async function confirmSale() {
-    await run(() => api.completeSale(auction.id), () => setSaleOpen(false));
+    await run(() => api.completeSale(auction.id, drafts), () => setSaleOpen(false));
   }
 
   async function confirmEnd() {
     await run(() => api.endAuction(auction.id), () => setEndOpen(false));
+  }
+
+  async function undoLastAction() {
+    await run(() => api.undoLiveAction(auction.id));
   }
 
   if (!live) {
@@ -177,15 +182,27 @@ export function LiveCouncil({
   const endReason =
     live.cursor >= auction.entries.length ? "noRemaining" : "noEligible";
 
+  const half = live.cursor >= auction.entries.length / 2;
+
   return (
     <section className="live-scene" aria-label={t(lang, "liveCouncilTitle")}>
       <header className="live-heading">
         <div>
           <h1>{auction.name}</h1>
           <p>
-            {t(lang, ended ? "endedState" : "liveCouncilTitle")} · {live.cursor} /{" "}
-            {auction.entries.length}
+            {t(lang, ended ? "endedState" : "liveCouncilTitle")} ·{" "}
+            {t(lang, half ? "secondHalf" : "firstHalf")}
           </p>
+        </div>
+        <div className="live-tools">
+          <button
+            type="button"
+            className="secondary small-btn"
+            disabled={!live.canUndo || pending}
+            onClick={undoLastAction}
+          >
+            {t(lang, "undo")}
+          </button>
         </div>
       </header>
       <div className="live-stage">
@@ -205,7 +222,7 @@ export function LiveCouncil({
               return next;
             })
           }
-          onConfirm={() => run(() => api.confirmBid(auction.id, 0, drafts[0] ?? []))}
+          onConfirm={() => run(() => api.confirmBid(auction.id, 0, drafts[0] ?? [], drafts))}
         />
         <section className="live-center" aria-label={t(lang, "activeCandidate")}>
           {!live.active ? (
@@ -302,13 +319,13 @@ export function LiveCouncil({
                     {t(lang, "finishSale")}
                   </button>
                 )}
-                {live.specialPass && !live.latest && (
+{live.specialPass && !live.latest && (
                   <>
                     <button
                       type="button"
                       className="secondary"
                       disabled={pending}
-                      onClick={() => run(() => api.passCandidate(auction.id))}
+                      onClick={() => run(() => api.passCandidate(auction.id, drafts))}
                     >
                       {t(lang, "pass")}
                     </button>
@@ -335,7 +352,7 @@ export function LiveCouncil({
               return next;
             })
           }
-          onConfirm={() => run(() => api.confirmBid(auction.id, 1, drafts[1] ?? []))}
+          onConfirm={() => run(() => api.confirmBid(auction.id, 1, drafts[1] ?? [], drafts))}
         />
       </div>
       {saleOpen && live.active && live.latest && saleTeam && (

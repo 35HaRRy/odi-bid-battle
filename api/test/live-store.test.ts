@@ -66,6 +66,82 @@ async function seedLiveAuction(store: PgStore) {
 }
 
 describe("live round store", () => {
+  it("undo restores halfway skip, transferred opening drafts, and permanent preparation lock", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction, ids } = await seedLiveAuctionWithGold(store, 20, 20, 8);
+      for (const [team, amount] of [[0, 1], [1, 20], [0, 1]] as const) {
+        await store.live.sendNext(auction.id);
+        await store.live.confirmBid(auction.id, team, [amount]);
+        await store.live.sell(auction.id);
+      }
+      await store.live.sendNext(auction.id);
+      const passed = await store.live.pass(auction.id, [[4], [0]]);
+      expect(passed.cursor).toBe(4);
+      expect(passed.skipped).toEqual([ids[3]]);
+      const restored = await store.live.undo(auction.id);
+      expect(restored.cursor).toBe(3);
+      expect(restored.activeCandidateId).toBe(ids[3]);
+      expect(restored.specialPass).toBe(true);
+      expect(restored.turn).toBe(0);
+      expect(restored.contributions).toEqual([[4], [0]]);
+      expect(restored.skipped).toEqual([]);
+      expect(restored.capacity).toBe(4);
+      let state = restored;
+      while (state.canUndo) state = await store.live.undo(auction.id);
+      expect(state.active).toBe(false);
+      expect(state.cursor).toBe(0);
+      expect(state.status).toBe("ongoing");
+      expect(state.teams.map((team) => team.remainingGold)).toEqual([20, 20]);
+      await expect(store.renameAuction(auction.id, "Changed")).rejects.toThrow("preparation locked");
+      await expect(store.live.undo(auction.id)).rejects.toThrow("nothing to undo");
+      expect(await store.live.getLive(auction.id)).toEqual(state);
+    } finally { await store.close(); }
+  });
+
+  it("undo termination restores only ready-to-end state across reconnects", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction } = await seedLiveAuctionWithGold(store, 1, 1);
+      for (const team of [0, 1] as const) {
+        await store.live.sendNext(auction.id);
+        await store.live.confirmBid(auction.id, team, [1]);
+        await store.live.sell(auction.id);
+      }
+      const before = await store.live.getLive(auction.id);
+      await store.live.endAuction(auction.id);
+      const fresh = await PgStore.connect(DATABASE_URL);
+      try { expect(await fresh.live.undo(auction.id)).toEqual(before); }
+      finally { await fresh.close(); }
+      expect((await store.getAuction(auction.id)).status).toBe("ongoing");
+    } finally { await store.close(); }
+  });
+  it("undo restores sale drafts and exact refunds only after undoing later presentation", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction, ids } = await seedLiveAuction(store);
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 0, [2, 3]);
+      await store.live.sell(auction.id, [[2, 3], [7]]);
+      await store.live.sendNext(auction.id);
+      const between = await store.live.undo(auction.id);
+      expect(between.active).toBe(false);
+      expect(between.teams[0].members.map((m) => m.balance)).toEqual([8, 7]);
+      const restored = await store.live.undo(auction.id);
+      expect(restored.activeCandidateId).toBe(ids[0]);
+      expect(restored.latest).toEqual({ team: 0, amount: 5, contributions: [2, 3] });
+      expect(restored.contributions).toEqual([[2, 3], [7]]);
+      expect(restored.turn).toBe(1);
+      expect(restored.cursor).toBe(0);
+      expect(restored.teams[0].members.map((m) => m.balance)).toEqual([10, 10]);
+      expect(restored.teams[1].remainingGold).toBe(20);
+      expect(restored.teams[0].acquired).toEqual([]);
+      const fresh = await PgStore.connect(DATABASE_URL);
+      try {
+        expect(await fresh.live.getLive(auction.id)).toEqual(restored);
+      } finally { await fresh.close(); }
+    } finally { await store.close(); }
+  });
   it("opens with no active candidate and persists across reconnects", async () => {
     const store = await PgStore.connect(DATABASE_URL);
     try {

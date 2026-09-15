@@ -86,6 +86,32 @@ describe.sequential("live bidding routes", () => {
     expect(bid.teams[0].remainingGold).toBe(10);
   });
 
+  it("undo over HTTP restores drafts and rejects invalid actions without adding history", async () => {
+    const post = (action: string, body?: unknown) => fetch(`${base}/auctions/${auctionId}/live/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}),
+    });
+    expect((await post("undo")).status).toBe(400);
+    await post("next");
+    await post("bids", { team: 0, contributions: [5], drafts: [[5], [0]] });
+    expect((await post("bids", { team: 1, contributions: [4] })).status).toBe(400);
+    expect((await post("sale", { drafts: "invalid" })).status).toBe(400);
+    const sold = await post("sale", { drafts: [[5], [7]] });
+    expect(sold.status).toBe(200);
+    const round = await (await post("undo")).json();
+    expect(round.contributions).toEqual([[5], [7]]);
+    expect(round.latest).toMatchObject({ team: 0, amount: 5 });
+    expect(round.teams.map((team: { remainingGold: number }) => team.remainingGold)).toEqual([10, 10]);
+    const bidUndone = await (await post("undo")).json();
+    expect(bidUndone.latest).toBeNull();
+    expect(bidUndone.turn).toBe(0);
+    expect(bidUndone.contributions).toEqual([[5], [0]]);
+    const initial = await (await post("undo")).json();
+    expect(initial.active).toBe(false);
+    expect(initial.canUndo).toBe(false);
+    expect(initial.status).toBe("ongoing");
+    expect((await post("undo")).status).toBe(400);
+  });
+
   it("settles sales over HTTP and rejects sales without a confirmed bid", async () => {
     const noBid = await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" });
     expect(noBid.status).toBe(400);
