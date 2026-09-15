@@ -10,13 +10,14 @@ import { DraftReview } from "./draft-review";
 import { LiveCouncil } from "./live-council";
 import type { FieldError } from "./api";
 
-type Tab = "auctions" | "catalog" | "lists" | "draft" | "battlefields";
+type Tab = "auctions" | "catalog" | "lists" | "draft" | "live" | "battlefields";
 
 const TABS: readonly Tab[] = [
   "auctions",
   "catalog",
   "lists",
   "draft",
+  "live",
   "battlefields",
 ];
 
@@ -1090,14 +1091,16 @@ function AuctionWorkspace({
   onError,
   view,
   onOpenDraft,
+  onOpenLive,
   onBackToAuctions,
   onCandidates,
 }: {
   lang: Lang;
   candidates: Candidate[];
   onError: (m: string | null) => void;
-  view: "auctions" | "draft";
+  view: "auctions" | "draft" | "live";
   onOpenDraft: () => void;
+  onOpenLive: () => void;
   onBackToAuctions: () => void;
   onCandidates: (c: Candidate[]) => void;
 }) {
@@ -1120,8 +1123,17 @@ function AuctionWorkspace({
   const [reviewReady, setReviewReady] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [startErrors, setStartErrors] = useState<FieldError[]>([]);
-  const active = auctions.find((a) => a.id === activeId) ?? null;
-  const isLive = active !== null && active.status !== "draft";
+  const rawActive = auctions.find((a) => a.id === activeId) ?? null;
+  const active =
+    view === "draft"
+      ? (rawActive?.status === "draft"
+          ? rawActive
+          : (auctions.find((a) => a.status === "draft") ?? null))
+      : view === "live"
+        ? (rawActive && rawActive.status !== "draft"
+            ? rawActive
+            : (auctions.find((a) => a.status !== "draft") ?? null))
+        : rawActive;
   const draftEntryIds = active ? active.entries : [];
   const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, () => {});
   const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
@@ -1199,7 +1211,9 @@ function AuctionWorkspace({
   function open(id: string) {
     setActiveId(id);
     localStorage.setItem("obb-selected-auction", id);
-    onOpenDraft();
+    const target = auctions.find((a) => a.id === id);
+    if (target && target.status !== "draft") onOpenLive();
+    else onOpenDraft();
   }
 
   async function confirmDeleteDraft() {
@@ -1242,6 +1256,7 @@ function AuctionWorkspace({
       setAuctions((ls) => ls.map((x) => (x.id === updated.id ? updated : x)));
       setStartErrors([]);
       onError(null);
+      onOpenLive();
     } catch (e) {
       if (e instanceof ApiError && e.status === 400) {
         const details = (e.details ?? {}) as { fieldErrors?: FieldError[] };
@@ -1306,8 +1321,6 @@ function AuctionWorkspace({
               {t(lang, "auctions")}
             </button>
           </>
-        ) : isLive ? (
-          <LiveCouncil lang={lang} auction={active} />
         ) : (
           <section aria-label={active.name || t(lang, "draft")}>
             <div className="section-title">
@@ -1409,7 +1422,7 @@ function AuctionWorkspace({
                 startErrors={startErrors}
               />
             )}
-            {!isLive && (
+            {(
               <DraftStepFooter
                 lang={lang}
                 step={draftStep}
@@ -1433,6 +1446,24 @@ function AuctionWorkspace({
             onClose={() => setEditingId(null)}
             onSave={saveDraftEntryEdit}
           />
+        )}
+      </section>
+    );
+  }
+
+  if (view === "live") {
+    return (
+      <section className="route-home">
+        <AppHeading title={t(lang, "ongoingAuction")} intro={t(lang, "homeIntro")} />
+        {!active ? (
+          <>
+            <p className="empty">{t(lang, "noAuctions")}</p>
+            <button className="secondary" onClick={onBackToAuctions}>
+              {t(lang, "auctions")}
+            </button>
+          </>
+        ) : (
+          <LiveCouncil lang={lang} auction={active} />
         )}
       </section>
     );
@@ -1683,6 +1714,12 @@ export default function App() {
           >
             {t(lang, "currentDraft")}
           </button>
+          <button
+            onClick={() => navigateToTab("live")}
+            aria-current={tab === "live" ? "page" : undefined}
+          >
+            {t(lang, "ongoingAuction")}
+          </button>
         </nav>
         <Status msg={error} />
         <main className="content">
@@ -1707,14 +1744,15 @@ export default function App() {
               lang={lang}
               candidates={candidates}
               onError={setError}
-              view={tab === "draft" ? "draft" : "auctions"}
+              view={tab === "draft" ? "draft" : tab === "live" ? "live" : "auctions"}
               onOpenDraft={() => navigateToTab("draft")}
+              onOpenLive={() => navigateToTab("live")}
               onBackToAuctions={() => navigateToTab("auctions")}
               onCandidates={setCandidates}
             />
           )}
         </main>
-        {tab === "draft" ? null : (
+        {tab === "draft" || tab === "live" ? null : (
           <footer className="footer">
             <p>{t(lang, "footerNote")}</p>
           </footer>
