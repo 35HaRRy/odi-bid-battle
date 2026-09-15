@@ -115,6 +115,12 @@ export interface LiveTeam {
   acquired: LiveAcquired[];
   members: LiveMember[];
 }
+export interface LiveBattlefield {
+  id: string;
+  name: string;
+  geography: string;
+  history: string;
+}
 export interface LiveState {
   auctionId: string;
   status: "ongoing" | "completed";
@@ -129,6 +135,8 @@ export interface LiveState {
   capacity: number;
   readyToEnd: boolean;
   canUndo: boolean;
+  battlefield: LiveBattlefield | null;
+  battlefieldVisible: boolean;
   teams: LiveTeam[];
 }
 

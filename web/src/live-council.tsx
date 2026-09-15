@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import {
   ApiError,
   api,
@@ -60,6 +60,8 @@ export function LiveCouncil({
   const [pending, setPending] = useState(false);
   const [saleOpen, setSaleOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
+  const [battleInfoOpen, setBattleInfoOpen] = useState(false);
+  const [showResult, setShowResult] = useState(false);
 
   // Match the approved prototype: the live council renders inside the
   // compact live shell while mounted.
@@ -79,8 +81,11 @@ export function LiveCouncil({
   useEffect(() => {
     let cancelled = false;
     setLive(null);
+    setTeams(null);
     setLoadError(null);
     setActionError(null);
+    setBattleInfoOpen(false);
+    setShowResult(false);
     refresh().catch(() => {
       if (!cancelled) setLoadError(t(lang, "persistFail"));
     });
@@ -184,8 +189,30 @@ export function LiveCouncil({
 
   const half = live.cursor >= auction.entries.length / 2;
 
+  if (showResult && ended) {
+    return (
+      <FinalPresentation
+        lang={lang}
+        auctionName={auction.name}
+        live={live}
+        teams={teams}
+        onBack={() => setShowResult(false)}
+        infoOpen={battleInfoOpen}
+        onToggleInfo={() => setBattleInfoOpen((open) => !open)}
+      />
+    );
+  }
+
+  const sceneImage = live.battlefieldVisible && live.battlefield
+    ? api.draftBattlefieldImageUrl(auction.id, live.cursor)
+    : api.auctionBackgroundUrl(auction.id, live.cursor);
+
   return (
-    <section className="live-scene" aria-label={t(lang, "liveCouncilTitle")}>
+    <section
+      className="live-scene"
+      aria-label={t(lang, "liveCouncilTitle")}
+      style={{ "--scene-image": `url("${sceneImage}")` } as CSSProperties}
+    >
       <header className="live-heading">
         <div>
           <h1>{auction.name}</h1>
@@ -203,6 +230,19 @@ export function LiveCouncil({
           >
             {t(lang, "undo")}
           </button>
+          {live.battlefieldVisible && live.battlefield && (
+            <div className="live-battlefield-control">
+              <strong>{live.battlefield.name}</strong>
+              <button
+                type="button"
+                className="secondary small-btn"
+                onClick={() => setBattleInfoOpen((open) => !open)}
+                aria-expanded={battleInfoOpen}
+              >
+                {t(lang, "battleInfo")}
+              </button>
+            </div>
+          )}
         </div>
       </header>
       <div className="live-stage">
@@ -233,8 +273,12 @@ export function LiveCouncil({
                     <h2>{t(lang, "endedTitle")}</h2>
                   </div>
                   <div className="live-center-actions">
-                    {/* Final presentation screen lands with #12; the control appears here. */}
-                    <button type="button" className="primary" disabled>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={!teams || pending}
+                      onClick={() => setShowResult(true)}
+                    >
                       {t(lang, "battleBegin")}
                     </button>
                   </div>
@@ -355,6 +399,13 @@ export function LiveCouncil({
           onConfirm={() => run(() => api.confirmBid(auction.id, 1, drafts[1] ?? [], drafts))}
         />
       </div>
+      {battleInfoOpen && live.battlefieldVisible && live.battlefield && (
+        <BattlefieldInfo
+          lang={lang}
+          battlefield={live.battlefield}
+          onClose={() => setBattleInfoOpen(false)}
+        />
+      )}
       {saleOpen && live.active && live.latest && saleTeam && (
         <Modal
           titleId="sale-dialog-title"
@@ -464,6 +515,121 @@ export function LiveCouncil({
           {total(0)} {t(lang, "gold")} · {total(1)} {t(lang, "gold")}
         </span>
       </footer>
+    </section>
+  );
+}
+
+function BattlefieldInfo({
+  lang,
+  battlefield,
+  onClose,
+}: {
+  lang: Lang;
+  battlefield: NonNullable<LiveState["battlefield"]>;
+  onClose: () => void;
+}) {
+  return (
+    <aside className="battlefield-info" aria-label={t(lang, "battleInfo")}>
+      <div className="battlefield-info-heading">
+        <div>
+          <p className="eyebrow">{t(lang, "battleInfo")}</p>
+          <h2>{battlefield.name}</h2>
+        </div>
+        <button type="button" className="quiet" onClick={onClose}>
+          {t(lang, "close")}
+        </button>
+      </div>
+      <div className="battlefield-info-grid">
+        <section>
+          <h3>{t(lang, "geographyFeatures")}</h3>
+          <p>{battlefield.geography}</p>
+        </section>
+        <section>
+          <h3>{t(lang, "historyPast")}</h3>
+          <p>{battlefield.history}</p>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function FinalPresentation({
+  lang,
+  auctionName,
+  live,
+  teams,
+  onBack,
+  infoOpen,
+  onToggleInfo,
+}: {
+  lang: Lang;
+  auctionName: string;
+  live: LiveState;
+  teams: SavedTeam[] | null;
+  onBack: () => void;
+  infoOpen: boolean;
+  onToggleInfo: () => void;
+}) {
+  const acquired = live.teams.reduce((count, team) => count + team.acquiredCount, 0);
+  const unpresented = Math.max(0, live.cursor - acquired - live.skipped.length);
+
+  return (
+    <section className="final-presentation" aria-label={t(lang, "resultTitle")}>
+      <header className="result-heading">
+        <p className="eyebrow">{t(lang, "endedState")}</p>
+        <h1>{t(lang, "resultTitle")}</h1>
+        <p>{auctionName}{live.battlefield ? ` · ${live.battlefield.name}` : ""}</p>
+      </header>
+      {live.battlefield && (
+        <>
+          <div className="result-tools">
+            <button type="button" className="secondary small-btn" onClick={onToggleInfo} aria-expanded={infoOpen}>
+              {t(lang, "battleInfo")}
+            </button>
+          </div>
+          {infoOpen && (
+            <BattlefieldInfo
+              lang={lang}
+              battlefield={live.battlefield}
+              onClose={onToggleInfo}
+            />
+          )}
+        </>
+      )}
+      <div className="result-teams">
+        {live.teams.map((team) => {
+          const meta = teams?.find((saved) => saved.position === team.position);
+          return (
+            <section className="result-team" key={team.position}>
+              <header>
+                {meta && (
+                  <img
+                    src={`data:${meta.flag.mime};base64,${meta.flag.data}`}
+                    alt={team.name}
+                  />
+                )}
+                <h2>{team.name}</h2>
+                {meta?.slogan && <p>{meta.slogan}</p>}
+              </header>
+              <div className="result-candidates" tabIndex={0} aria-label={`${team.name}: ${t(lang, "acquired")}`}>
+                {team.acquired.length > 0 ? team.acquired.map((candidate) => (
+                  <article key={candidate.candidateId}>
+                    <img src={api.imageUrl(candidate.candidateId)} alt={candidate.name} />
+                    <h3>{candidate.name}</h3>
+                    <p>{candidate.price} {t(lang, "gold")}</p>
+                  </article>
+                )) : <p className="description">{t(lang, "resultEmpty")}</p>}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      <p className="result-incomplete">
+        {t(lang, "skipped")}: {live.skipped.length} · {t(lang, "unpresented")}: {unpresented} · {t(lang, "resultNote")}
+      </p>
+      <div className="result-actions">
+        <button type="button" className="secondary" onClick={onBack}>{t(lang, "backLive")}</button>
+      </div>
     </section>
   );
 }

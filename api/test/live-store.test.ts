@@ -149,6 +149,12 @@ describe("live round store", () => {
       const live = await store.live.getLive(auction.id);
       expect(live.active).toBe(false);
       expect(live.activeCandidateId).toBeNull();
+      expect(live.battlefield).toMatchObject({
+        name: "Alan",
+        geography: "Vadi",
+        history: "Tarih",
+      });
+      expect(live.battlefieldVisible).toBe(false);
       expect(live.contributions).toEqual([
         [0, 0],
         [0],
@@ -162,6 +168,57 @@ describe("live round store", () => {
     } finally {
       await store.close();
     }
+  }, 30000);
+
+  it("switches the battlefield after halfway processing and restores it on undo", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction } = await seedLiveAuctionWithGold(store, 20, 20, 4);
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 0, [1]);
+      const halfway = await store.live.sell(auction.id);
+      expect(halfway.cursor).toBe(1);
+      expect(halfway.battlefieldVisible).toBe(false);
+
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 1, [1]);
+      const transitioned = await store.live.sell(auction.id);
+      expect(transitioned.cursor).toBe(2);
+      expect(transitioned.battlefieldVisible).toBe(true);
+
+      await store.live.sendNext(auction.id);
+      const restored = await store.live.undo(auction.id);
+      expect(restored.cursor).toBe(2);
+      expect(restored.active).toBe(false);
+      expect(restored.battlefieldVisible).toBe(true);
+      const initialScene = await store.live.undo(auction.id);
+      expect(initialScene.cursor).toBe(1);
+      expect(initialScene.active).toBe(true);
+      expect(initialScene.battlefieldVisible).toBe(false);
+    } finally { await store.close(); }
+  }, 30000);
+
+  it("counts an allowed skip at halfway and undo restores the initial scene", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction } = await seedLiveAuctionWithGold(store, 2, 2, 4);
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 0, [1]);
+      await store.live.confirmBid(auction.id, 1, [2]);
+      const sold = await store.live.sell(auction.id);
+      expect(sold.cursor).toBe(1);
+      expect(sold.battlefieldVisible).toBe(false);
+
+      await store.live.sendNext(auction.id);
+      const transitioned = await store.live.pass(auction.id);
+      expect(transitioned.cursor).toBe(2);
+      expect(transitioned.battlefieldVisible).toBe(true);
+
+      const restored = await store.live.undo(auction.id);
+      expect(restored.cursor).toBe(1);
+      expect(restored.battlefieldVisible).toBe(false);
+      expect(restored.active).toBe(true);
+    } finally { await store.close(); }
   }, 30000);
 
   it("sends next candidate in fixed order and confirms strictly increasing bids without deducting gold", async () => {

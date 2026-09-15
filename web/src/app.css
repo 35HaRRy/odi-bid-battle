@@ -263,6 +263,63 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+.battlefield-info {
+  margin-top: 20px;
+  border-block: 1px solid var(--line);
+  padding: 18px 0;
+}
+.live-battlefield-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.live-battlefield-control strong {
+  color: var(--green);
+  font: 16px var(--serif);
+}
+.battlefield-info-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 18px;
+}
+.battlefield-info-heading h2 {
+  font-size: 25px;
+  margin-top: 3px;
+}
+.eyebrow {
+  color: var(--green);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.battlefield-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 15px;
+}
+.battlefield-info-grid h3 {
+  font-size: 17px;
+  margin-bottom: 5px;
+}
+.battlefield-info-grid p {
+  color: var(--muted);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.result-tools {
+  display: flex;
+  justify-content: center;
+  margin: -14px 0 20px;
+}
+@media (max-width: 600px) {
+  .battlefield-info-grid {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+}
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {

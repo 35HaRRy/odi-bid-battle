@@ -965,12 +965,15 @@ export class PgStore {
         name: string;
         geography: string;
         history: string;
+        image: Buffer;
+        imageMime: string;
+        imageName: string;
         hasImage: boolean;
         archivedAt: string | null;
       } | null = null;
       if (row.battlefield_id !== null) {
         const base = await client.query(
-          "SELECT id, name, geography, history, image, archived_at FROM battlefields WHERE id=$1",
+          "SELECT id, name, geography, history, image, image_mime, image_name, archived_at FROM battlefields WHERE id=$1",
           [row.battlefield_id],
         );
         const b = base.rows[0] as unknown as
@@ -980,24 +983,31 @@ export class PgStore {
               geography: string;
               history: string;
               image: Buffer;
+              image_mime: string;
+              image_name: string;
               archived_at: Date | null;
             }
           | undefined;
         if (!b) throw new AssetError("battlefield not found");
         const over = await client.query(
-          "SELECT battlefield_geography, battlefield_history, battlefield_image FROM auctions WHERE id=$1",
+          "SELECT battlefield_geography, battlefield_history, battlefield_image, battlefield_image_mime, battlefield_image_name FROM auctions WHERE id=$1",
           [auctionId],
         );
         const o = over.rows[0] as unknown as {
           battlefield_geography: string | null;
           battlefield_history: string | null;
           battlefield_image: Buffer | null;
+          battlefield_image_mime: string | null;
+          battlefield_image_name: string | null;
         };
         battlefield = {
           id: b.id,
           name: b.name,
           geography: o.battlefield_geography ?? b.geography,
           history: o.battlefield_history ?? b.history,
+          image: o.battlefield_image ? Buffer.from(o.battlefield_image) : Buffer.from(b.image),
+          imageMime: o.battlefield_image ? o.battlefield_image_mime! : b.image_mime,
+          imageName: o.battlefield_image ? o.battlefield_image_name! : b.image_name,
           hasImage: o.battlefield_image !== null || (b.image?.length ?? 0) > 0,
           archivedAt: b.archived_at ? (b.archived_at as Date).toISOString() : null,
         };
@@ -1098,13 +1108,25 @@ export class PgStore {
           );
         }
         await client.query(
-          "UPDATE auctions SET follows_source=false, status='ongoing', updated_at=now() WHERE id=$1",
-          [auctionId],
+          `UPDATE auctions
+           SET follows_source=false,
+               battlefield_image=COALESCE(battlefield_image,$2),
+               battlefield_image_mime=COALESCE(battlefield_image_mime,$3),
+               battlefield_image_name=COALESCE(battlefield_image_name,$4),
+               status='ongoing', updated_at=now()
+           WHERE id=$1`,
+          [auctionId, battlefield?.image ?? null, battlefield?.imageMime ?? null, battlefield?.imageName ?? null],
         );
       } else {
-        await client.query("UPDATE auctions SET status='ongoing', updated_at=now() WHERE id=$1", [
-          auctionId,
-        ]);
+        await client.query(
+          `UPDATE auctions
+           SET battlefield_image=COALESCE(battlefield_image,$2),
+               battlefield_image_mime=COALESCE(battlefield_image_mime,$3),
+               battlefield_image_name=COALESCE(battlefield_image_name,$4),
+               status='ongoing', updated_at=now()
+           WHERE id=$1`,
+          [auctionId, battlefield?.image ?? null, battlefield?.imageMime ?? null, battlefield?.imageName ?? null],
+        );
       }
       await client.query("COMMIT");
       return await this.getAuction(auctionId);

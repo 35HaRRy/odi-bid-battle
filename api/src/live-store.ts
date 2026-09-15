@@ -32,6 +32,13 @@ export interface LiveTeamView {
   members: LiveMemberView[];
 }
 
+export interface LiveBattlefieldView {
+  id: string;
+  name: string;
+  geography: string;
+  history: string;
+}
+
 export interface LiveView {
   auctionId: string;
   status: "ongoing" | "completed";
@@ -46,6 +53,8 @@ export interface LiveView {
   capacity: number;
   readyToEnd: boolean;
   canUndo: boolean;
+  battlefield: LiveBattlefieldView | null;
+  battlefieldVisible: boolean;
   teams: LiveTeamView[];
 }
 
@@ -444,6 +453,16 @@ export class LiveStore {
   async getLive(auctionId: string): Promise<LiveView> {
     if (!this.client) return this.transaction(auctionId, (live) => live.getLive(auctionId));
     const { entries, status } = await this.requireLive(auctionId, true);
+    const battlefieldResult = await this.q.query<LiveBattlefieldView>(
+      `SELECT a.battlefield_id AS id,
+              b.name,
+              COALESCE(a.battlefield_geography, b.geography) AS geography,
+              COALESCE(a.battlefield_history, b.history) AS history
+       FROM auctions a
+       LEFT JOIN battlefields b ON b.id = a.battlefield_id
+       WHERE a.id=$1`,
+      [auctionId],
+    );
     const { teams, members } = await this.loadTeams(auctionId);
     const balances = await this.ensureBalances(auctionId, members);
     const state = await this.readState(auctionId);
@@ -511,6 +530,10 @@ export class LiveStore {
       capacity,
       readyToEnd,
       canUndo: await this.canUndo(auctionId),
+      battlefield: battlefieldResult.rows[0]?.id
+        ? battlefieldResult.rows[0]
+        : null,
+      battlefieldVisible: state.cursor >= entries.length / 2,
       teams: views,
     };
   }
