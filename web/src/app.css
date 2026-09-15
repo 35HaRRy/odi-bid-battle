@@ -269,15 +269,6 @@
   border-block: 1px solid var(--line);
   padding: 18px 0;
 }
-.live-battlefield-control {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.live-battlefield-control strong {
-  color: var(--green);
-  font: 16px var(--serif);
-}
 .battlefield-info-heading {
   display: flex;
   justify-content: space-between;

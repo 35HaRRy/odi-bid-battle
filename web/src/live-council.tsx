@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   ApiError,
   api,
@@ -44,6 +44,35 @@ function errorKey(message: string): string | null {
   return null;
 }
 
+function FullscreenIcon({ active }: { active: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
+      {active ? (
+        <path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5" />
+      ) : (
+        <path d="M3 9V3h6M15 3h6v6M21 15v6h-6M9 21H3v-6" />
+      )}
+    </svg>
+  );
+}
+
+function UndoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M9 5 4 10l5 5" />
+      <path d="M4 10h10a6 6 0 0 1 0 12h-1" />
+    </svg>
+  );
+}
+
+function CrossedSwordsIcon() {
+  return (
+    <span className="crossed-swords" aria-hidden="true">
+      ⚔
+    </span>
+  );
+}
+
 export function LiveCouncil({
   lang,
   auction,
@@ -60,8 +89,10 @@ export function LiveCouncil({
   const [pending, setPending] = useState(false);
   const [saleOpen, setSaleOpen] = useState(false);
   const [endOpen, setEndOpen] = useState(false);
-  const [battleInfoOpen, setBattleInfoOpen] = useState(false);
+  const [battleInfoOpen, setBattleInfoOpen] = useState(true);
   const [showResult, setShowResult] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const sceneRef = useRef<HTMLElement>(null);
 
   // Match the approved prototype: the live council renders inside the
   // compact live shell while mounted.
@@ -70,6 +101,26 @@ export function LiveCouncil({
     shell?.classList.add("live-shell");
     return () => shell?.classList.remove("live-shell");
   }, []);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(document.fullscreenElement === sceneRef.current);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      await sceneRef.current?.requestFullscreen();
+    } catch {
+      setIsFullscreen(false);
+    }
+  }
 
   const refresh = useCallback(async () => {
     const next = await api.getLive(auction.id);
@@ -84,7 +135,7 @@ export function LiveCouncil({
     setTeams(null);
     setLoadError(null);
     setActionError(null);
-    setBattleInfoOpen(false);
+    setBattleInfoOpen(true);
     setShowResult(false);
     refresh().catch(() => {
       if (!cancelled) setLoadError(t(lang, "persistFail"));
@@ -193,6 +244,7 @@ export function LiveCouncil({
     return (
       <FinalPresentation
         lang={lang}
+        auctionId={auction.id}
         auctionName={auction.name}
         live={live}
         teams={teams}
@@ -209,42 +261,64 @@ export function LiveCouncil({
 
   return (
     <section
+      ref={sceneRef}
       className="live-scene"
       aria-label={t(lang, "liveCouncilTitle")}
       style={{ "--scene-image": `url("${sceneImage}")` } as CSSProperties}
     >
       <header className="live-heading">
-        <div>
+        <div className="live-heading-main">
           <h1>{auction.name}</h1>
           <p>
             {t(lang, ended ? "endedState" : "liveCouncilTitle")} ·{" "}
             {t(lang, half ? "secondHalf" : "firstHalf")}
           </p>
         </div>
+        {live.battlefieldVisible && live.battlefield && (
+          <div className="live-battlefield-control">
+            <strong>{live.battlefield.name}</strong>
+            <button
+              type="button"
+              className="secondary battlefield-button"
+              onClick={() => setBattleInfoOpen((open) => !open)}
+              aria-expanded={battleInfoOpen}
+              aria-label={t(lang, "battleInfo")}
+              title={t(lang, "battleInfo")}
+            >
+              <CrossedSwordsIcon />
+            </button>
+          </div>
+        )}
         <div className="live-tools">
           <button
             type="button"
-            className="secondary small-btn"
+            className="icon-button"
             disabled={!live.canUndo || pending}
             onClick={undoLastAction}
+            aria-label={t(lang, "undo")}
+            title={t(lang, "undo")}
           >
-            {t(lang, "undo")}
+            <UndoIcon />
           </button>
-          {live.battlefieldVisible && live.battlefield && (
-            <div className="live-battlefield-control">
-              <strong>{live.battlefield.name}</strong>
-              <button
-                type="button"
-                className="secondary small-btn"
-                onClick={() => setBattleInfoOpen((open) => !open)}
-                aria-expanded={battleInfoOpen}
-              >
-                {t(lang, "battleInfo")}
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => void toggleFullscreen()}
+            aria-label={t(lang, "fullscreen")}
+            aria-pressed={isFullscreen}
+            title={t(lang, "fullscreen")}
+          >
+            <FullscreenIcon active={isFullscreen} />
+          </button>
         </div>
       </header>
+      {battleInfoOpen && live.battlefieldVisible && live.battlefield && (
+        <BattlefieldInfo
+          lang={lang}
+          battlefield={live.battlefield}
+          onClose={() => setBattleInfoOpen(false)}
+        />
+      )}
       <div className="live-stage">
         <LiveTeamPane
           lang={lang}
@@ -399,13 +473,6 @@ export function LiveCouncil({
           onConfirm={() => run(() => api.confirmBid(auction.id, 1, drafts[1] ?? [], drafts))}
         />
       </div>
-      {battleInfoOpen && live.battlefieldVisible && live.battlefield && (
-        <BattlefieldInfo
-          lang={lang}
-          battlefield={live.battlefield}
-          onClose={() => setBattleInfoOpen(false)}
-        />
-      )}
       {saleOpen && live.active && live.latest && saleTeam && (
         <Modal
           titleId="sale-dialog-title"
@@ -532,12 +599,8 @@ function BattlefieldInfo({
     <aside className="battlefield-info" aria-label={t(lang, "battleInfo")}>
       <div className="battlefield-info-heading">
         <div>
-          <p className="eyebrow">{t(lang, "battleInfo")}</p>
           <h2>{battlefield.name}</h2>
         </div>
-        <button type="button" className="quiet" onClick={onClose}>
-          {t(lang, "close")}
-        </button>
       </div>
       <div className="battlefield-info-grid">
         <section>
@@ -555,6 +618,7 @@ function BattlefieldInfo({
 
 function FinalPresentation({
   lang,
+  auctionId,
   auctionName,
   live,
   teams,
@@ -563,6 +627,7 @@ function FinalPresentation({
   onToggleInfo,
 }: {
   lang: Lang;
+  auctionId: string;
   auctionName: string;
   live: LiveState;
   teams: SavedTeam[] | null;
@@ -572,9 +637,16 @@ function FinalPresentation({
 }) {
   const acquired = live.teams.reduce((count, team) => count + team.acquiredCount, 0);
   const unpresented = Math.max(0, live.cursor - acquired - live.skipped.length);
+  const sceneImage = live.battlefieldVisible && live.battlefield
+    ? api.draftBattlefieldImageUrl(auctionId, live.cursor)
+    : api.auctionBackgroundUrl(auctionId, live.cursor);
 
   return (
-    <section className="final-presentation" aria-label={t(lang, "resultTitle")}>
+    <section
+      className="final-presentation"
+      aria-label={t(lang, "resultTitle")}
+      style={{ "--result-scene-image": `url("${sceneImage}")` } as CSSProperties}
+    >
       <header className="result-heading">
         <p className="eyebrow">{t(lang, "endedState")}</p>
         <h1>{t(lang, "resultTitle")}</h1>
@@ -583,8 +655,15 @@ function FinalPresentation({
       {live.battlefield && (
         <>
           <div className="result-tools">
-            <button type="button" className="secondary small-btn" onClick={onToggleInfo} aria-expanded={infoOpen}>
-              {t(lang, "battleInfo")}
+            <button
+              type="button"
+              className="secondary battlefield-button"
+              onClick={onToggleInfo}
+              aria-expanded={infoOpen}
+              aria-label={t(lang, "battleInfo")}
+              title={t(lang, "battleInfo")}
+            >
+              <CrossedSwordsIcon />
             </button>
           </div>
           {infoOpen && (

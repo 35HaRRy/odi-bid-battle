@@ -1742,11 +1742,15 @@ dialog .description {
 }
 
 .live-heading {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
     padding: 0 0 16px;
     gap: 15px
+}
+
+.live-heading-main {
+    min-width: 0
 }
 
 .live-heading h1 {
@@ -1759,10 +1763,46 @@ dialog .description {
     margin-top: 4px
 }
 
+.live-battlefield-control {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    justify-self: center
+}
+
+.live-battlefield-control strong {
+    color: var(--green);
+    font: 18px var(--serif)
+}
+
 .live-tools {
     display: flex;
+    align-items: center;
+    justify-self: end;
     gap: 8px;
     flex-wrap: wrap
+}
+
+.battlefield-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.crossed-swords {
+    display: inline-block;
+    font-size: 32px;
+    line-height: 1;
+    transform: translateY(-1px)
 }
 
 .live-stage {
@@ -2082,6 +2122,23 @@ dialog .description {
     pointer-events: none
 }
 
+.final-presentation {
+    position: relative;
+    isolation: isolate
+}
+
+.final-presentation::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: var(--result-scene-image);
+    background-size: cover;
+    background-position: center;
+    opacity: .12;
+    z-index: -1;
+    pointer-events: none
+}
+
 .sale-details {
     text-align: center
 }
@@ -2308,26 +2365,18 @@ dialog .description {
     line-height: 1.7
 }
 
-.is-fullscreen {
-    overflow: auto;
-    background: var(--paper)
-}
-
-.shell:fullscreen {
+.live-scene:fullscreen {
     margin: 0;
     max-width: none;
     width: 100%;
+    min-height: 100vh;
+    padding: 28px;
     overflow: auto;
     background: var(--paper)
 }
 
-.shell:fullscreen .topstrip,
-.shell:fullscreen .app-nav {
-    display: none
-}
-
-.shell:fullscreen .live-stage {
-    height: calc(100vh - 235px)
+.live-scene:fullscreen .live-stage {
+    height: calc(100vh - 125px)
 }
 
 @media(min-width:1650px) {
