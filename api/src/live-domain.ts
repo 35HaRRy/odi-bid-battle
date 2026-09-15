@@ -157,6 +157,50 @@ export function confirmBid(
   return { ok: true, state: next };
 }
 
+export interface LiveSale {
+  team: 0 | 1;
+  amount: number;
+  contributions: number[];
+  candidateId: string;
+}
+
+export type SaleResult =
+  | { ok: true; state: LiveRoundState; sale: LiveSale }
+  | { ok: false; error: string };
+
+/**
+ * Settle the active round to the latest confirmed bid (spec 6.4).
+ * Uses the confirmed bid only; unconfirmed drafts never affect the sale.
+ * Clears round contributions/bids, closes the round, and advances the cursor
+ * without presenting the next candidate.
+ */
+export function completeSale(state: LiveRoundState): SaleResult {
+  if (!state.active) return { ok: false, error: "no active round" };
+  if (!state.activeCandidateId)
+    return { ok: false, error: "no active candidate" };
+  if (!state.latest) return { ok: false, error: "no confirmed bid" };
+  const sale: LiveSale = {
+    team: state.latest.team,
+    amount: state.latest.amount,
+    contributions: [...state.latest.contributions],
+    candidateId: state.activeCandidateId,
+  };
+  return {
+    ok: true,
+    sale,
+    state: {
+      cursor: state.cursor + 1,
+      active: false,
+      activeCandidateId: null,
+      turn: state.turn,
+      specialPass: false,
+      latest: null,
+      contributions: state.contributions.map((row) => row.map(() => 0)),
+      skipped: [...state.skipped],
+    },
+  };
+}
+
 export type PassResult =
   | { ok: true; state: LiveRoundState }
   | { ok: false; error: string };

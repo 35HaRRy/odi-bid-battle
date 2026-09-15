@@ -86,6 +86,32 @@ describe.sequential("live bidding routes", () => {
     expect(bid.teams[0].remainingGold).toBe(10);
   });
 
+  it("settles sales over HTTP and rejects sales without a confirmed bid", async () => {
+    const noBid = await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" });
+    expect(noBid.status).toBe(400);
+
+    await fetch(`${base}/auctions/${auctionId}/live/next`, { method: "POST" });
+    const stillNoBid = await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" });
+    expect(stillNoBid.status).toBe(400);
+
+    await fetch(`${base}/auctions/${auctionId}/live/bids`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team: 0, contributions: [5] }),
+    });
+    const sold = await (
+      await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" })
+    ).json();
+    expect(sold.active).toBe(false);
+    expect(sold.cursor).toBe(1);
+    expect(sold.teams[0].members[0].balance).toBe(5);
+    expect(sold.teams[0].acquired[0].price).toBe(5);
+    expect(sold.teams[0].acquired[0].candidateId).toBe(firstCandidate);
+
+    const duplicate = await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" });
+    expect(duplicate.status).toBe(400);
+  });
+
   it("maps draft auctions to 409 and missing auctions to 404", async () => {
     const draft = await (
       await fetch(`${base}/auctions`, {

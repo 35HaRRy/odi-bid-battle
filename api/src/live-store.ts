@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import {
+  completeSale as completeSalePure,
   confirmBid as confirmBidPure,
   isTeamEligible,
   passCandidate as passPure,
@@ -15,11 +16,18 @@ export interface LiveMemberView {
   contribution: number;
 }
 
+export interface LiveAcquired {
+  candidateId: string;
+  name: string;
+  price: number;
+}
+
 export interface LiveTeamView {
   position: 0 | 1;
   name: string;
   remainingGold: number;
   acquiredCount: number;
+  acquired: LiveAcquired[];
   members: LiveMemberView[];
 }
 
@@ -50,6 +58,7 @@ const LIVE_ERRORS = new Set([
   "bid must exceed latest bid",
   "pass not allowed",
   "no active candidate",
+  "no confirmed bid",
 ]);
 
 export function isLiveError(message: string): boolean {
@@ -261,13 +270,26 @@ export class LiveStore {
     const { teams, members } = await this.loadTeams(auctionId);
     const balances = await this.ensureBalances(auctionId, members);
     const state = await this.readState(auctionId);
-    const acquired = await this.pool.query<{ candidate_id: string; team_position: number }>(
-      "SELECT candidate_id, team_position FROM auction_live_acquired WHERE auction_id=$1",
+    const acquired = await this.pool.query<{
+      candidate_id: string;
+      team_position: number;
+      price: number;
+      name: string;
+    }>(
+      `SELECT a.candidate_id, a.team_position, a.price, c.name
+       FROM auction_live_acquired a
+       JOIN candidates c ON c.id = a.candidate_id
+       LEFT JOIN auction_entries e ON e.auction_id = a.auction_id AND e.candidate_id = a.candidate_id
+       WHERE a.auction_id=$1 ORDER BY e.position`,
       [auctionId],
     );
-    const acquiredByTeam: string[][] = [[], []];
+    const acquiredByTeam: LiveAcquired[][] = [[], []];
     for (const r of acquired.rows)
-      acquiredByTeam[r.team_position as 0 | 1].push(r.candidate_id);
+      acquiredByTeam[r.team_position as 0 | 1].push({
+        candidateId: r.candidate_id,
+        name: r.name,
+        price: r.price,
+      });
     const capacity = teamCapacity(entries.length);
     const draftMap = new Map<string, number>();
     state.memberOrder.forEach((ids, t) =>
@@ -281,6 +303,7 @@ export class LiveStore {
         name: team.name,
         remainingGold: ms.reduce((s, m) => s + (balances.get(m.id) ?? m.initial_gold), 0),
         acquiredCount: acquiredByTeam[pos].length,
+        acquired: acquiredByTeam[pos],
         members: ms.map((m) => ({
           id: m.id,
           name: m.name,
@@ -379,6 +402,91 @@ export class LiveStore {
     const latestByMember = new Map<string, number>();
     teamMembers.forEach((m, i) => latestByMember.set(m.id, contributions[i]));
     await this.writeState(auctionId, next.state, state.memberOrder, latestByMember);
+    return this.getLive(auctionId);
+  }
+
+  async sell(auctionId: string): Promise<LiveView> {
+    await this.requireOngoing(auctionId);
+    const { teams, members } = await this.loadTeams(auctionId);
+    const balances = await this.ensureBalances(auctionId, members);
+    const state = await this.readState(auctionId);
+    const next = completeSalePure({
+      cursor: state.cursor,
+      active: state.active,
+      activeCandidateId: state.activeCandidateId,
+      turn: state.turn,
+      specialPass: state.specialPass,
+      latest: state.latest,
+      contributions: state.contributions,
+      skipped: state.skipped,
+    });
+    if (!next.ok) throw new Error(next.error);
+    const { sale, state: settled } = next;
+    const winnerRow = teams.find((t) => t.position === sale.team)!;
+    const winnerMembers = members.filter((m) => m.team_id === winnerRow.id);
+    const winnerOrder = state.memberOrder[sale.team];
+    const deductions = new Map<string, number>();
+    winnerOrder.forEach((id, i) => deductions.set(id, sale.contributions[i] ?? 0));
+    for (const m of winnerMembers) {
+      const current = balances.get(m.id) ?? m.initial_gold;
+      if (current - (deductions.get(m.id) ?? 0) < 0)
+        throw new Error("invalid contribution");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "INSERT INTO auction_live_acquired (auction_id, candidate_id, team_position, price) VALUES ($1,$2,$3,$4)",
+        [auctionId, sale.candidateId, sale.team, sale.amount],
+      );
+      for (const m of winnerMembers) {
+        const deduction = deductions.get(m.id) ?? 0;
+        if (deduction === 0) continue;
+        await client.query(
+          "UPDATE auction_live_balances SET balance = balance - $1 WHERE auction_id=$2 AND member_id=$3",
+          [deduction, auctionId, m.id],
+        );
+      }
+      await client.query(
+        `INSERT INTO auction_live_state (auction_id, cursor, active, active_candidate_id, turn, special_pass, latest_team, latest_amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (auction_id) DO UPDATE SET cursor=$2, active=$3, active_candidate_id=$4, turn=$5, special_pass=$6, latest_team=$7, latest_amount=$8, updated_at=now()`,
+        [
+          auctionId,
+          settled.cursor,
+          settled.active,
+          settled.activeCandidateId,
+          settled.turn,
+          settled.specialPass,
+          null,
+          null,
+        ],
+      );
+      await client.query("DELETE FROM auction_live_contributions WHERE auction_id=$1", [auctionId]);
+      for (let t = 0; t < 2; t++) {
+        for (let i = 0; i < state.memberOrder[t].length; i++) {
+          await client.query(
+            "INSERT INTO auction_live_contributions (auction_id, member_id, amount) VALUES ($1,$2,$3)",
+            [auctionId, state.memberOrder[t][i], 0],
+          );
+        }
+      }
+      await client.query("DELETE FROM auction_live_latest WHERE auction_id=$1", [auctionId]);
+      await client.query("DELETE FROM auction_live_skipped WHERE auction_id=$1", [auctionId]);
+      for (let i = 0; i < settled.skipped.length; i++) {
+        await client.query(
+          "INSERT INTO auction_live_skipped (auction_id, candidate_id, position) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+          [auctionId, settled.skipped[i], i],
+        );
+      }
+      await client.query("UPDATE auctions SET updated_at=now() WHERE id=$1", [auctionId]);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
     return this.getLive(auctionId);
   }
 

@@ -8,6 +8,7 @@ import {
 } from "./api";
 import { t, type Lang } from "./i18n";
 import { ImagePreview } from "./image-preview";
+import { Modal } from "./modal";
 
 export function isLiveAuction(status: string): boolean {
   return status === "ongoing" || status === "completed";
@@ -30,6 +31,7 @@ function errorKey(message: string): string | null {
   if (/contribution/.test(message)) return "contributionError";
   if (/not your turn/.test(message)) return "notYourTurn";
   if (/team cannot bid/.test(message)) return "cannotBid";
+  if (/no confirmed bid/.test(message)) return "saleError";
   if (/no active round/.test(message)) return "noActiveRound";
   return null;
 }
@@ -48,6 +50,7 @@ export function LiveCouncil({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [saleOpen, setSaleOpen] = useState(false);
 
   // Match the approved prototype: the live council renders inside the
   // compact live shell while mounted.
@@ -129,6 +132,25 @@ export function LiveCouncil({
     setDrafts(next.teams.map((team) => team.members.map((m) => m.contribution)));
   }
 
+  async function confirmSale() {
+    if (pending) return;
+    setPending(true);
+    setActionError(null);
+    try {
+      await refreshAfter(() => api.completeSale(auction.id));
+      setSaleOpen(false);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        const key = errorKey(e.message);
+        setActionError(key ? t(lang, key) : e.message);
+      } else {
+        setActionError(t(lang, "persistFail"));
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
   if (!live) {
     return (
       <section className="locked" aria-label={t(lang, "liveCouncilTitle")}>
@@ -146,6 +168,9 @@ export function LiveCouncil({
 
   const teamMeta = (pos: 0 | 1) =>
     (teams ?? []).find((tm) => tm.position === pos) ?? null;
+
+  const saleTeam = live.latest ? live.teams[live.latest.team] : null;
+  const saleMeta = live.latest ? teamMeta(live.latest.team) : null;
 
   const total = (pos: 0 | 1) =>
     (drafts[pos] ?? []).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
@@ -225,6 +250,19 @@ export function LiveCouncil({
                 )}
               </div>
               <div className="live-center-actions">
+                {live.latest && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={pending}
+                    onClick={() => {
+                      setActionError(null);
+                      setSaleOpen(true);
+                    }}
+                  >
+                    {t(lang, "finishSale")}
+                  </button>
+                )}
                 {live.specialPass && !live.latest && (
                   <>
                     <button
@@ -261,7 +299,65 @@ export function LiveCouncil({
           onConfirm={() => run(() => api.confirmBid(auction.id, 1, drafts[1] ?? []))}
         />
       </div>
-      {actionError && (
+      {saleOpen && live.active && live.latest && saleTeam && (
+        <Modal
+          titleId="sale-dialog-title"
+          onClose={() => {
+            if (!pending) setSaleOpen(false);
+          }}
+        >
+          <dialog className="app-dialog" aria-labelledby="sale-dialog-title">
+            <h2 id="sale-dialog-title">{t(lang, "saleTitle")}</h2>
+            <div className="sale-details">
+              {live.activeCandidateId && (
+                <img
+                  src={api.imageUrl(live.activeCandidateId)}
+                  alt={candidateName || live.activeCandidateId}
+                />
+              )}
+              <h3>{candidateName || live.activeCandidateId}</h3>
+              <div className="sale-team">
+                {saleMeta && (
+                  <img
+                    src={`data:${saleMeta.flag.mime};base64,${saleMeta.flag.data}`}
+                    alt={saleTeam.name}
+                  />
+                )}
+                <strong>{saleTeam.name}</strong>
+              </div>
+              <div className="price">
+                {live.latest.amount} {t(lang, "gold")}
+              </div>
+            </div>
+            <p>{t(lang, "saleExplain")}</p>
+            {actionError && (
+              <p className="field-error" role="alert">
+                {actionError}
+              </p>
+            )}
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={pending}
+                onClick={() => setSaleOpen(false)}
+                autoFocus
+              >
+                {t(lang, "cancel")}
+              </button>
+              <button
+                type="button"
+                className="primary"
+                disabled={pending}
+                onClick={confirmSale}
+              >
+                {t(lang, "confirmSale")}
+              </button>
+            </div>
+          </dialog>
+        </Modal>
+      )}
+      {actionError && !saleOpen && (
         <p className="field-error" role="alert">
           {actionError}
         </p>
@@ -396,7 +492,18 @@ function LiveTeamPane({
           </span>
         </div>
         <div className="live-acquired-list" tabIndex={0} aria-label={`${team.name}: ${t(lang, "acquired")}`}>
-          <p className="description">{t(lang, "noneAcquired")}</p>
+          {(team.acquired ?? []).length === 0 ? (
+            <p className="description">{t(lang, "noneAcquired")}</p>
+          ) : (
+            (team.acquired ?? []).map((a) => (
+              <div key={a.candidateId}>
+                <span>{a.name}</span>
+                <span>
+                  {a.price} <small>{t(lang, "gold")}</small>
+                </span>
+              </div>
+            ))
+          )}
         </div>
       </section>
     </section>

@@ -94,6 +94,72 @@ describe("live round store", () => {
     }
   }, 30000);
 
+  it("scenario 5: settles the latest confirmed bid, deducts only the winner, and clears the round", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction, ids } = await seedLiveAuction(store);
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 0, [2, 3]);
+
+      const sold = await store.live.sell(auction.id);
+      expect(sold.active).toBe(false);
+      expect(sold.activeCandidateId).toBeNull();
+      expect(sold.latest).toBeNull();
+      expect(sold.cursor).toBe(1);
+      // No next candidate presented automatically.
+      expect(sold.contributions).toEqual([
+        [0, 0],
+        [0],
+      ]);
+      // Only the winner's confirmed contributions are deducted.
+      expect(sold.teams[0].members.map((m) => m.balance)).toEqual([8, 7]);
+      expect(sold.teams[0].remainingGold).toBe(15);
+      expect(sold.teams[1].members.map((m) => m.balance)).toEqual([20]);
+      expect(sold.teams[1].remainingGold).toBe(20);
+      // Acquired candidate appears with name and price.
+      expect(sold.teams[0].acquired).toMatchObject([{ price: 5 }]);
+      expect(sold.teams[0].acquired[0].candidateId).toBe(ids[0]);
+      expect(sold.teams[0].acquired[0].name.length).toBeGreaterThan(0);
+      expect(sold.teams[1].acquired).toEqual([]);
+      // Scenario 11: the next sale can fill the winner's last free
+      // capacity slot even though the loser cannot respond.
+      const second = await store.live.sendNext(auction.id);
+      expect(second.activeCandidateId).toBe(ids[1]);
+      await store.live.confirmBid(auction.id, 1, [6]);
+      await store.live.confirmBid(auction.id, 0, [4, 3]);
+      const filled = await store.live.sell(auction.id);
+      expect(filled.teams[0].acquiredCount).toBe(2);
+      expect(filled.teams[0].acquired.map((a) => a.price)).toEqual([5, 7]);
+      expect(filled.teams[0].members.map((m) => m.balance)).toEqual([4, 4]);
+      expect(filled.teams[1].members.map((m) => m.balance)).toEqual([20]);
+      // Settling twice is rejected; the round is gone.
+      await expect(store.live.sell(auction.id)).rejects.toThrow("no active round");
+      // Persists across reconnects.
+      const fresh = await PgStore.connect(DATABASE_URL);
+      try {
+        const again = await fresh.live.getLive(auction.id);
+        expect(again.teams[0].members.map((m) => m.balance)).toEqual([4, 4]);
+        expect(again.teams[0].acquired).toMatchObject([{ price: 5 }, { price: 7 }]);
+      } finally {
+        await fresh.close();
+      }
+    } finally {
+      await store.close();
+    }
+  }, 30000);
+
+  it("rejects a sale with no confirmed bid", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction } = await seedLiveAuction(store);
+      await expect(store.live.sell(auction.id)).rejects.toThrow("no active round");
+      await store.live.sendNext(auction.id);
+      await expect(store.live.sell(auction.id)).rejects.toThrow("no confirmed bid");
+    } finally {
+      await store.close();
+    }
+  }, 30000);
+
   it("rejects live actions on drafts and missing auctions", async () => {
     const store = await PgStore.connect(DATABASE_URL);
     try {

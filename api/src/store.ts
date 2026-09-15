@@ -182,6 +182,7 @@ export class PgStore {
         confirmBid: (auctionId, team, contributions) =>
           run(() => live.confirmBid(auctionId, team, contributions)),
         pass: (auctionId) => run(() => live.pass(auctionId)),
+        sell: (auctionId) => run(() => live.sell(auctionId)),
       };
     }
     return this.liveRepository;

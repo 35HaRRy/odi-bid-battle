@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  completeSale,
   confirmBid,
   emptyRoundState,
   isTeamEligible,
@@ -124,6 +125,39 @@ describe("live bidding rounds (spec 4, 5, 6.1-6.3)", () => {
     // Only the team whose turn it is can bid.
     expect(confirmBid(1, opened.state, [5], [10], false).ok).toBe(false);
     expect(confirmBid(0, opened.state, [5], [10], true).ok).toBe(true);
+  });
+
+  it("scenario 5: sale settles the latest confirmed bid and clears the round", () => {
+    let s = emptyRoundState([2, 1]);
+    const opened = sendNextCandidate(s, ["c1", "c2", "c3", "c4"], [true, true], [2, 1]);
+    if (!opened.ok) throw new Error("open failed");
+    s = opened.state;
+    const a5 = confirmBid(0, s, [2, 3], [10, 10], true);
+    if (!a5.ok) throw new Error("A bid failed");
+    s = a5.state;
+    // B's unconfirmed 7 is only a draft; the confirmed bid stays A's 5.
+    const sold = completeSale(s);
+    expect(sold.ok).toBe(true);
+    if (!sold.ok) return;
+    expect(sold.sale).toMatchObject({ team: 0, amount: 5, candidateId: "c1" });
+    expect(sold.sale.contributions).toEqual([2, 3]);
+    expect(sold.state.active).toBe(false);
+    expect(sold.state.activeCandidateId).toBeNull();
+    expect(sold.state.latest).toBeNull();
+    expect(sold.state.cursor).toBe(1);
+    expect(sold.state.skipped).toEqual([]);
+    expect(sold.state.contributions).toEqual([
+      [0, 0],
+      [0],
+    ]);
+  });
+
+  it("rejects a sale with no active round or no confirmed bid", () => {
+    expect(completeSale(emptyRoundState([1, 1])).ok).toBe(false);
+    let s = emptyRoundState([1, 1]);
+    const opened = sendNextCandidate(s, ["c1", "c2"], [true, true], [1, 1]);
+    if (!opened.ok) throw new Error("open failed");
+    expect(completeSale(opened.state).ok).toBe(false);
   });
 
   it("refuses to open when neither team is eligible", () => {

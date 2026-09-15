@@ -102,11 +102,17 @@ export interface LiveMember {
   balance: number;
   contribution: number;
 }
+export interface LiveAcquired {
+  candidateId: string;
+  name: string;
+  price: number;
+}
 export interface LiveTeam {
   position: 0 | 1;
   name: string;
   remainingGold: number;
   acquiredCount: number;
+  acquired: LiveAcquired[];
   members: LiveMember[];
 }
 export interface LiveState {
@@ -478,6 +484,12 @@ export const api = {
   async passCandidate(auctionId: string): Promise<LiveState> {
     const r = await check(
       await fetch(`${BASE}/auctions/${auctionId}/live/pass`, { method: "POST" }),
+    );
+    return r.json();
+  },
+  async completeSale(auctionId: string): Promise<LiveState> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/live/sale`, { method: "POST" }),
     );
     return r.json();
   },
