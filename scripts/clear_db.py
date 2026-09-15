@@ -22,11 +22,14 @@ DEFAULT_DATABASE_URL = "postgres://bidbattle:bidbattle@localhost:5433/bidbattle"
 
 # FK bagimli tablolar once gelse de TRUNCATE CASCADE ile sira onemsiz.
 TABLES = [
+    "auction_team_members",
+    "auction_teams",
     "auction_entries",
     "list_entries",
     "auctions",
     "candidate_lists",
     "candidates",
+    "battlefields",
 ]
 
 
