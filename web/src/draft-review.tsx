@@ -1,7 +1,30 @@
 import { useEffect, useState } from "react";
-import { api, type Auction, type DraftBattlefield, type SavedTeam } from "./api";
+import {
+  api,
+  type Auction,
+  type DraftBattlefield,
+  type FieldError,
+  type SavedTeam,
+} from "./api";
 import { t, type Lang } from "./i18n";
 import { ImagePreview } from "./image-preview";
+
+function stepForFieldError(path: string): number {
+  if (
+    path === "battlefield" ||
+    path.startsWith("battlefield.") ||
+    path === "background"
+  )
+    return 0;
+  if (
+    path === "auction.name" ||
+    path === "entries" ||
+    path.startsWith("entries") ||
+    path.startsWith("candidates")
+  )
+    return 1;
+  return 2;
+}
 
 interface Check {
   key: string;
@@ -17,6 +40,10 @@ export function DraftReview({
   namesReady,
   resolveName,
   onGoStep,
+  onReadiness,
+  startPending,
+  startErrors,
+  onStart,
 }: {
   lang: Lang;
   auction: Auction;
@@ -25,6 +52,10 @@ export function DraftReview({
   namesReady: boolean;
   resolveName: (id: string) => string;
   onGoStep: (step: number) => void;
+  onReadiness?: (ready: boolean) => void;
+  startPending: boolean;
+  startErrors: FieldError[];
+  onStart: () => void;
 }) {
   const [teams, setTeams] = useState<SavedTeam[] | null>(null);
   const [battlefield, setBattlefield] = useState<DraftBattlefield | null>(null);
@@ -86,6 +117,11 @@ export function DraftReview({
     { key: "checkEqual", ok: !!teamPair && totals[0] === totals[1], step: 2 },
   ];
   const failures = checks.filter((c) => !c.ok);
+  const ready = failures.length === 0;
+
+  useEffect(() => {
+    onReadiness?.(ready);
+  }, [ready, onReadiness]);
 
   return (
     <section aria-label={t(lang, "stepReview")}>
@@ -196,7 +232,34 @@ export function DraftReview({
             <br />
             {t(lang, "lockText")}
           </p>
-          <p className="description">{t(lang, "startDisabledNote")}</p>
+          {startErrors.length > 0 && (
+            <div className="error-summary" role="alert">
+              <h3>{t(lang, "startFailed")}</h3>
+              <ul>
+                {startErrors.map((e) => (
+                  <li key={e.path}>
+                    <button
+                      type="button"
+                      className="quiet"
+                      onClick={() => onGoStep(stepForFieldError(e.path))}
+                    >
+                      {e.message}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <button
+            type="button"
+            className="primary"
+            disabled={!ready || startPending}
+            title={ready ? undefined : t(lang, "startDisabledNote")}
+            onClick={onStart}
+          >
+            {t(lang, "start")}
+          </button>
+          {!ready && <p className="description">{t(lang, "startDisabledNote")}</p>}
         </aside>
       </div>
     </section>

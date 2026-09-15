@@ -3,7 +3,12 @@ import { Pool, type PoolClient } from "pg";
 import { AssetError } from "./battlefield-domain.js";
 import { BattlefieldStore } from "./battlefield-store.js";
 import { TeamStore } from "./team-store.js";
-import { buildListCopyName } from "./domain.js";
+import {
+  buildListCopyName,
+  validateStartReadiness,
+  StartValidationError,
+  type AuctionTeam,
+} from "./domain.js";
 
 export class PersistenceError extends Error {
   constructor(message: string, opts?: { cause?: unknown }) {
@@ -482,6 +487,7 @@ export class PgStore {
         /invalid (name|image)/i.test((err as Error).message)
       )
         throw err;
+      if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
       throw pgError("failed to edit draft candidate", err);
     }
@@ -681,15 +687,23 @@ export class PgStore {
     }
   }
 
+  private async requireDraft(auctionId: string): Promise<void> {
+    const r = await this.q.query("SELECT status FROM auctions WHERE id=$1", [auctionId]);
+    const row = r.rows[0] as unknown as { status: string } | undefined;
+    if (!row) throw new Error("auction not found");
+    if (row.status !== "draft") throw new AssetError("preparation locked");
+  }
+
   private async ensureForked(auctionId: string): Promise<void> {
     const r = await this.q.query(
-      "SELECT follows_source, source_list_id FROM auctions WHERE id=$1",
+      "SELECT follows_source, source_list_id, status FROM auctions WHERE id=$1",
       [auctionId],
     );
     const row = r.rows[0] as unknown as
-      | { follows_source: boolean; source_list_id: string | null }
+      | { follows_source: boolean; source_list_id: string | null; status: string }
       | undefined;
     if (!row) throw new Error("auction not found");
+    if (row.status !== "draft") throw new AssetError("preparation locked");
     if (!row.follows_source) return;
     if (!row.source_list_id) return;
     const src = await this.getList(row.source_list_id);
@@ -732,6 +746,7 @@ export class PgStore {
   async renameAuction(id: string, name: string): Promise<AuctionRecord> {
     if (name.length > 200) throw new Error("invalid name");
     try {
+      await this.requireDraft(id);
       await this.ensureForked(id);
       await this.q.query(
         "UPDATE auctions SET name=$2, updated_at=now() WHERE id=$1",
@@ -740,6 +755,7 @@ export class PgStore {
       return await this.getAuction(id);
     } catch (err) {
       if ((err as Error).message === "auction not found") throw err;
+      if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
       throw pgError("failed to rename auction", err);
     }
@@ -779,6 +795,7 @@ export class PgStore {
     candidateId: string,
   ): Promise<AuctionRecord> {
     try {
+      await this.requireDraft(auctionId);
       await this.ensureForked(auctionId);
       const cur = await this.getAuction(auctionId);
       if (cur.entries.includes(candidateId))
@@ -795,6 +812,7 @@ export class PgStore {
         /duplicate/i.test((err as Error).message)
       )
         throw err;
+      if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
       throw pgError("failed to add auction entry", err);
     }
@@ -805,6 +823,7 @@ export class PgStore {
     candidateId: string,
   ): Promise<AuctionRecord> {
     try {
+      await this.requireDraft(auctionId);
       await this.ensureForked(auctionId);
       const cur = await this.getAuction(auctionId);
       await this.writeAuctionEntries(
@@ -817,6 +836,7 @@ export class PgStore {
       );
       return await this.getAuction(auctionId);
     } catch (err) {
+      if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
       throw pgError("failed to remove auction entry", err);
     }
@@ -828,6 +848,7 @@ export class PgStore {
     toIndex: number,
   ): Promise<AuctionRecord> {
     try {
+      await this.requireDraft(auctionId);
       await this.ensureForked(auctionId);
       const cur = await this.getAuction(auctionId);
       const from = cur.entries.indexOf(candidateId);
@@ -844,8 +865,216 @@ export class PgStore {
       return await this.getAuction(auctionId);
     } catch (err) {
       if ((err as Error).message === "entry not found") throw err;
+      if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
       throw pgError("failed to reorder auction entries", err);
+    }
+  }
+
+  async startAuction(auctionId: string): Promise<AuctionRecord> {
+    const pool = this.pool;
+    if (!pool || typeof (pool as Pool).connect !== "function") {
+      throw pgError("failed to start auction", new Error("no pool"));
+    }
+    const client = await (pool as Pool).connect();
+    try {
+      await client.query("BEGIN");
+      const head = await client.query(
+        "SELECT id, name, source_list_id, follows_source, battlefield_id, status FROM auctions WHERE id=$1 FOR UPDATE",
+        [auctionId],
+      );
+      const row = head.rows[0] as unknown as
+        | {
+            id: string;
+            name: string;
+            source_list_id: string | null;
+            follows_source: boolean;
+            battlefield_id: string | null;
+            status: string;
+          }
+        | undefined;
+      if (!row) throw new Error("auction not found");
+      if (row.status === "ongoing") {
+        await client.query("COMMIT");
+        return await this.getAuction(auctionId);
+      }
+      if (row.status !== "draft") throw new AssetError("preparation locked");
+
+      let entries: string[];
+      if (row.follows_source && row.source_list_id) {
+        const e = await client.query(
+          "SELECT candidate_id FROM list_entries WHERE list_id=$1 ORDER BY position",
+          [row.source_list_id],
+        );
+        entries = (e.rows as unknown as { candidate_id: string }[]).map((x) => x.candidate_id);
+      } else {
+        const e = await client.query(
+          "SELECT candidate_id FROM auction_entries WHERE auction_id=$1 ORDER BY position",
+          [auctionId],
+        );
+        entries = (e.rows as unknown as { candidate_id: string }[]).map((x) => x.candidate_id);
+      }
+
+      let battlefield: {
+        id: string;
+        name: string;
+        geography: string;
+        history: string;
+        hasImage: boolean;
+        archivedAt: string | null;
+      } | null = null;
+      if (row.battlefield_id !== null) {
+        const base = await client.query(
+          "SELECT id, name, geography, history, image, archived_at FROM battlefields WHERE id=$1",
+          [row.battlefield_id],
+        );
+        const b = base.rows[0] as unknown as
+          | {
+              id: string;
+              name: string;
+              geography: string;
+              history: string;
+              image: Buffer;
+              archived_at: Date | null;
+            }
+          | undefined;
+        if (!b) throw new AssetError("battlefield not found");
+        const over = await client.query(
+          "SELECT battlefield_geography, battlefield_history, battlefield_image FROM auctions WHERE id=$1",
+          [auctionId],
+        );
+        const o = over.rows[0] as unknown as {
+          battlefield_geography: string | null;
+          battlefield_history: string | null;
+          battlefield_image: Buffer | null;
+        };
+        battlefield = {
+          id: b.id,
+          name: b.name,
+          geography: o.battlefield_geography ?? b.geography,
+          history: o.battlefield_history ?? b.history,
+          hasImage: o.battlefield_image !== null || (b.image?.length ?? 0) > 0,
+          archivedAt: b.archived_at ? (b.archived_at as Date).toISOString() : null,
+        };
+      }
+
+      const candRows =
+        entries.length === 0
+          ? []
+          : (
+              await client.query(
+                "SELECT id, name, image FROM candidates WHERE id=ANY($1)",
+                [entries],
+              )
+            ).rows as unknown as { id: string; name: string; image: Buffer }[];
+      const candById = new Map(candRows.map((c) => [c.id, c]));
+
+      const teamRows = (
+        await client.query(
+          "SELECT id, auction_id, name, slogan, flag_image, flag_mime, flag_name, position, created_at FROM auction_teams WHERE auction_id=$1 ORDER BY position, created_at, id",
+          [auctionId],
+        )
+      ).rows as unknown as {
+        id: string;
+        auction_id: string;
+        name: string;
+        slogan: string | null;
+        flag_image: Buffer;
+        flag_mime: string;
+        flag_name: string;
+        position: number;
+        created_at: Date;
+      }[];
+      const teams: AuctionTeam[] = [];
+      for (const t of teamRows) {
+        const mRows = (
+          await client.query(
+            "SELECT id, team_id, name, avatar_image, avatar_mime, avatar_name, initial_gold, created_at FROM auction_team_members WHERE team_id=$1 ORDER BY created_at, id",
+            [t.id],
+          )
+        ).rows as unknown as {
+          id: string;
+          team_id: string;
+          name: string;
+          avatar_image: Buffer | null;
+          avatar_mime: string | null;
+          avatar_name: string | null;
+          initial_gold: number;
+          created_at: Date;
+        }[];
+        teams.push({
+          id: t.id,
+          auctionId: t.auction_id,
+          name: t.name,
+          slogan: t.slogan,
+          flag: { buffer: Buffer.from(t.flag_image), mime: t.flag_mime, name: t.flag_name },
+          position: t.position as 0 | 1,
+          members: mRows.map((m) => ({
+            id: m.id,
+            teamId: m.team_id,
+            name: m.name,
+            avatar: {
+              buffer: m.avatar_image ? Buffer.from(m.avatar_image) : null,
+              mime: m.avatar_mime,
+              name: m.avatar_name,
+            },
+            initialGold: m.initial_gold,
+            createdAt: (m.created_at as Date).toISOString(),
+          })),
+          createdAt: (t.created_at as Date).toISOString(),
+        });
+      }
+
+      const readiness = validateStartReadiness({
+        auction: { name: row.name },
+        entries,
+        candidates: entries.map((id) => {
+          const c = candById.get(id);
+          return {
+            id,
+            name: c?.name ?? "",
+            hasImage: !!c && (c.image?.length ?? 0) > 0,
+          };
+        }),
+        battlefield,
+        backgroundAvailable: true,
+        teams,
+      });
+      if (!readiness.valid) {
+        throw new StartValidationError(readiness.errors, readiness.fieldErrors);
+      }
+
+      if (row.follows_source) {
+        await client.query("DELETE FROM auction_entries WHERE auction_id=$1", [auctionId]);
+        for (let i = 0; i < entries.length; i++) {
+          await client.query(
+            "INSERT INTO auction_entries (auction_id, candidate_id, position) VALUES ($1,$2,$3)",
+            [auctionId, entries[i], i],
+          );
+        }
+        await client.query(
+          "UPDATE auctions SET follows_source=false, status='ongoing', updated_at=now() WHERE id=$1",
+          [auctionId],
+        );
+      } else {
+        await client.query("UPDATE auctions SET status='ongoing', updated_at=now() WHERE id=$1", [
+          auctionId,
+        ]);
+      }
+      await client.query("COMMIT");
+      return await this.getAuction(auctionId);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (
+        (err as Error).message === "auction not found" ||
+        err instanceof AssetError ||
+        err instanceof StartValidationError
+      )
+        throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to start auction", err);
+    } finally {
+      client.release();
     }
   }
 }

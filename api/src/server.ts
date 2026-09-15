@@ -3,6 +3,7 @@ import express from "express";
 import multer from "multer";
 import { PgStore } from "./store.js";
 import { AssetError } from "./battlefield-domain.js";
+import { StartValidationError } from "./domain.js";
 import { assetErrorHttp, mountBattlefieldRoutes } from "./battlefield-routes.js";
 import { mountTeamRoutes } from "./team-routes.js";
 
@@ -12,8 +13,11 @@ const DATABASE_URL =
   "postgres://bidbattle:bidbattle@localhost:5433/bidbattle";
 
 function toHttp(err: unknown): { status: number; body: string } {
-  if (err instanceof AssetError) return assetErrorHttp(err);
+  if (err instanceof AssetError) return assetErrorHttp(err) as { status: number; body: string };
+  if (err instanceof StartValidationError)
+    return { status: 400, body: "invalid preparation" };
   const msg = (err as Error).message ?? "";
+  if (msg === "preparation locked") return { status: 409, body: msg };
   if (msg === "invalid name" || msg === "invalid image")
     return { status: 400, body: msg };
   if (/duplicate/i.test(msg)) return { status: 409, body: "duplicate entry" };
@@ -272,6 +276,20 @@ export function buildApp(store: PgStore): express.Express {
       await store.deleteDraftAuction(req.params.id);
       res.status(204).end();
     } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.post("/auctions/:id/start", async (req, res) => {
+    try {
+      res.json(await store.startAuction(req.params.id));
+    } catch (err) {
+      if (err instanceof StartValidationError) {
+        return res
+          .status(400)
+          .json({ error: "invalid preparation", fieldErrors: err.fieldErrors });
+      }
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
     }

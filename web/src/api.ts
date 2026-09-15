@@ -257,6 +257,12 @@ export const api = {
   async deleteAuction(id: string): Promise<void> {
     await check(await fetch(`${BASE}/auctions/${id}`, { method: "DELETE" }));
   },
+  async startAuction(id: string): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${id}/start`, { method: "POST" }),
+    );
+    return r.json();
+  },
   async addAuctionEntry(
     auctionId: string,
     candidateId: string,

@@ -336,3 +336,116 @@ export function validateAuctionPreparation(
 
   return { valid: errors.length === 0, errors };
 }
+
+export interface StartFieldError {
+  path: string;
+  message: string;
+}
+
+export interface StartCandidateInfo {
+  id: string;
+  name: string;
+  hasImage: boolean;
+}
+
+export interface StartBattlefieldInfo {
+  id: string;
+  name: string;
+  geography: string;
+  history: string;
+  hasImage: boolean;
+  archivedAt: string | null;
+}
+
+export interface StartReadinessInput {
+  auction: { name: string };
+  entries: string[];
+  candidates: StartCandidateInfo[];
+  battlefield: StartBattlefieldInfo | null;
+  backgroundAvailable: boolean;
+  teams: AuctionTeam[];
+}
+
+export class StartValidationError extends Error {
+  readonly errors: string[];
+  readonly fieldErrors: StartFieldError[];
+  constructor(errors: string[], fieldErrors: StartFieldError[]) {
+    super("invalid preparation");
+    this.name = "StartValidationError";
+    this.errors = errors;
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+export function validateStartReadiness(input: StartReadinessInput): {
+  valid: boolean;
+  errors: string[];
+  fieldErrors: StartFieldError[];
+} {
+  const errors: string[] = [];
+  const fieldErrors: StartFieldError[] = [];
+  const fail = (path: string, message: string) => {
+    errors.push(message);
+    fieldErrors.push({ path, message });
+  };
+
+  const name = input.auction.name ?? "";
+  if (!name.trim()) fail("auction.name", "auction name is required");
+  else if (name.length > 200) fail("auction.name", "auction name too long");
+
+  if (!input.battlefield) {
+    fail("battlefield", "battlefield is required");
+  } else {
+    const b = input.battlefield;
+    if (!b.name.trim()) fail("battlefield.name", "battlefield name is required");
+    if (!b.geography.trim()) fail("battlefield.geography", "battlefield geography is required");
+    if (!b.history.trim()) fail("battlefield.history", "battlefield history is required");
+    if (!b.hasImage) fail("battlefield.image", "battlefield image is required");
+  }
+  if (!input.backgroundAvailable) fail("background", "background image is required");
+
+  if (input.entries.length < 4 || input.entries.length % 2 !== 0) {
+    fail("entries", "candidate list must contain an even number of candidates, at least four");
+  }
+  const byId = new Map(input.candidates.map((c) => [c.id, c]));
+  for (const id of input.entries) {
+    const c = byId.get(id);
+    if (!c) {
+      fail("entries", `candidate ${id} not found`);
+      continue;
+    }
+    if (!c.name.trim()) fail(`candidates.${id}.name`, `candidate ${id} name is required`);
+    if (!c.hasImage) fail(`candidates.${id}.image`, `candidate ${id} image is required`);
+  }
+
+  const draft = validateTeamDraft(input.teams);
+  for (const e of draft.errors) errors.push(e);
+  // Map draft team errors to field paths best-effort by re-checking.
+  if (input.teams.length !== 2) {
+    fieldErrors.push({ path: "teams", message: "exactly two teams are required" });
+  } else {
+    const [t1, t2] = input.teams;
+    [t1, t2].forEach((team, i) => {
+      const p = `teams[${i}]`;
+      if (!team.name.trim()) fieldErrors.push({ path: `${p}.name`, message: "team name is required" });
+      if (!(team.slogan ?? "").trim()) fieldErrors.push({ path: `${p}.slogan`, message: "slogan is required" });
+      if (!team.flag.buffer || team.flag.buffer.length === 0)
+        fieldErrors.push({ path: `${p}.flag`, message: "team flag is required" });
+      if (team.members.length === 0)
+        fieldErrors.push({ path: `${p}.members`, message: "team must have at least one member" });
+      team.members.forEach((m, j) => {
+        if (!m.name.trim())
+          fieldErrors.push({ path: `${p}.members[${j}].name`, message: "member name is required" });
+        if (!isValidInitialGold(m.initialGold))
+          fieldErrors.push({ path: `${p}.members[${j}].initialGold`, message: "invalid initial gold" });
+      });
+    });
+    const balance = validateTeamBalance(t1, t2);
+    if (!balance.valid) {
+      errors.push(balance.error || "teams must have equal total gold");
+      fieldErrors.push({ path: "teams", message: balance.error || "teams must have equal total gold" });
+    }
+  }
+
+  return { valid: errors.length === 0, errors, fieldErrors };
+}

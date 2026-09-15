@@ -7,6 +7,8 @@ import { ImagePreview } from "./image-preview";
 import { BattlefieldLibrary, BattlefieldPreparation } from "./battlefields";
 import { DraftTeams } from "./draft-teams";
 import { DraftReview } from "./draft-review";
+import { LiveCouncil } from "./live-council";
+import type { FieldError } from "./api";
 
 type Tab = "auctions" | "catalog" | "lists" | "draft" | "battlefields";
 
@@ -261,12 +263,18 @@ function DraftStepFooter({
   onGo,
   teamsSaveRef,
   teamsSaveDisabled,
+  startDisabled,
+  startPending,
+  onStart,
 }: {
   lang: Lang;
   step: number;
   onGo: (step: number) => void;
   teamsSaveRef: { current: (() => void) | null };
   teamsSaveDisabled: boolean;
+  startDisabled: boolean;
+  startPending: boolean;
+  onStart: () => void;
 }) {
   const prevName = step > 0 ? t(lang, DRAFT_STEP_KEYS[step - 1]) : null;
   const nextName = step < 3 ? t(lang, DRAFT_STEP_KEYS[step + 1]) : null;
@@ -316,8 +324,9 @@ function DraftStepFooter({
           <button
             type="button"
             className="primary step-nav"
-            disabled
-            title={t(lang, "startDisabledNote")}
+            disabled={startDisabled || startPending}
+            title={startDisabled ? t(lang, "startDisabledNote") : undefined}
+            onClick={onStart}
           >
             {t(lang, "start")}
           </button>
@@ -1108,7 +1117,11 @@ function AuctionWorkspace({
   const [draftStep, setDraftStep] = useState<number>(0);
   const teamsSaveRef = useRef<(() => void) | null>(null);
   const [teamsSaveDisabled, setTeamsSaveDisabled] = useState(true);
+  const [reviewReady, setReviewReady] = useState(false);
+  const [startPending, setStartPending] = useState(false);
+  const [startErrors, setStartErrors] = useState<FieldError[]>([]);
   const active = auctions.find((a) => a.id === activeId) ?? null;
+  const isLive = active !== null && active.status !== "draft";
   const draftEntryIds = active ? active.entries : [];
   const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, () => {});
   const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
@@ -1156,6 +1169,12 @@ function AuctionWorkspace({
   useEffect(() => {
     setRename(active?.name ?? "");
   }, [active?.id, active?.name]);
+
+  useEffect(() => {
+    setReviewReady(false);
+    setStartErrors([]);
+    setStartPending(false);
+  }, [active?.id]);
 
   async function create() {
     try {
@@ -1214,6 +1233,28 @@ function AuctionWorkspace({
     }
   }
 
+  async function handleStart() {
+    if (!active || startPending) return;
+    setStartPending(true);
+    setStartErrors([]);
+    try {
+      const updated = await api.startAuction(active.id);
+      setAuctions((ls) => ls.map((x) => (x.id === updated.id ? updated : x)));
+      setStartErrors([]);
+      onError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 400) {
+        const details = (e.details ?? {}) as { fieldErrors?: FieldError[] };
+        setStartErrors(Array.isArray(details.fieldErrors) ? details.fieldErrors : []);
+      } else {
+        setStartErrors([]);
+      }
+      onError(t(lang, "startFailed"));
+    } finally {
+      setStartPending(false);
+    }
+  }
+
   async function saveDraftEntryEdit(name: string, file: File | null) {
     if (!active || !editingId) return;
     try {
@@ -1265,6 +1306,8 @@ function AuctionWorkspace({
               {t(lang, "auctions")}
             </button>
           </>
+        ) : isLive ? (
+          <LiveCouncil lang={lang} auction={active} />
         ) : (
           <section aria-label={active.name || t(lang, "draft")}>
             <div className="section-title">
@@ -1362,15 +1405,24 @@ function AuctionWorkspace({
                 })}
                 resolveName={resolveDraftName}
                 onGoStep={setDraftStep}
+                onReadiness={setReviewReady}
+                startPending={startPending}
+                startErrors={startErrors}
+                onStart={handleStart}
               />
             )}
-            <DraftStepFooter
-              lang={lang}
-              step={draftStep}
-              onGo={setDraftStep}
-              teamsSaveRef={teamsSaveRef}
-              teamsSaveDisabled={teamsSaveDisabled}
-            />
+            {!isLive && (
+              <DraftStepFooter
+                lang={lang}
+                step={draftStep}
+                onGo={setDraftStep}
+                teamsSaveRef={teamsSaveRef}
+                teamsSaveDisabled={teamsSaveDisabled}
+                startDisabled={!reviewReady}
+                startPending={startPending}
+                onStart={handleStart}
+              />
+            )}
           </section>
         )}
         {active && editingId && (
