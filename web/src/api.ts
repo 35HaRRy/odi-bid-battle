@@ -96,6 +96,32 @@ export interface FieldError {
   path: string;
   message: string;
 }
+export interface LiveMember {
+  id: string;
+  name: string;
+  balance: number;
+  contribution: number;
+}
+export interface LiveTeam {
+  position: 0 | 1;
+  name: string;
+  remainingGold: number;
+  acquiredCount: number;
+  members: LiveMember[];
+}
+export interface LiveState {
+  auctionId: string;
+  cursor: number;
+  active: boolean;
+  activeCandidateId: string | null;
+  turn: 0 | 1;
+  specialPass: boolean;
+  latest: { team: 0 | 1; amount: number; contributions: number[] } | null;
+  contributions: number[][];
+  skipped: string[];
+  capacity: number;
+  teams: LiveTeam[];
+}
 
 function editForm(name: string, file: File | null): FormData {
   const fd = new FormData();
@@ -422,6 +448,36 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ teams }),
       }),
+    );
+    return r.json();
+  },
+  async getLive(auctionId: string): Promise<LiveState> {
+    const r = await check(await fetch(`${BASE}/auctions/${auctionId}/live`));
+    return r.json();
+  },
+  async sendNextCandidate(auctionId: string): Promise<LiveState> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/live/next`, { method: "POST" }),
+    );
+    return r.json();
+  },
+  async confirmBid(
+    auctionId: string,
+    team: 0 | 1,
+    contributions: number[],
+  ): Promise<LiveState> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/live/bids`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ team, contributions }),
+      }),
+    );
+    return r.json();
+  },
+  async passCandidate(auctionId: string): Promise<LiveState> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/live/pass`, { method: "POST" }),
     );
     return r.json();
   },

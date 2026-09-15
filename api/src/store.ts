@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { AssetError } from "./battlefield-domain.js";
 import { BattlefieldStore } from "./battlefield-store.js";
+import { isLiveError, LiveStore } from "./live-store.js";
 import { TeamStore } from "./team-store.js";
 import {
   buildListCopyName,
@@ -9,6 +10,17 @@ import {
   StartValidationError,
   type AuctionTeam,
 } from "./domain.js";
+
+const LIVE_PASSTHROUGH = new Set([
+  "auction not found",
+  "auction teams missing",
+  "auction not started",
+  "auction completed",
+]);
+
+function isLivePassthrough(message: string): boolean {
+  return LIVE_PASSTHROUGH.has(message) || isLiveError(message);
+}
 
 export class PersistenceError extends Error {
   constructor(message: string, opts?: { cause?: unknown }) {
@@ -84,6 +96,7 @@ export class PgStore {
   private q: Queryable;
   private assetStore?: Pick<BattlefieldStore, keyof BattlefieldStore>;
   private teamRepository?: Pick<TeamStore, keyof TeamStore>;
+  private liveRepository?: Pick<LiveStore, keyof LiveStore>;
 
   constructor(pool: Queryable & { end?: () => Promise<void> }) {
     this.q = pool;
@@ -143,6 +156,35 @@ export class PgStore {
       };
     }
     return this.teamRepository;
+  }
+
+  get live(): Pick<LiveStore, keyof LiveStore> {
+    if (!this.liveRepository) {
+      if (!this.pool || typeof this.pool.connect !== "function") {
+        throw pgError("failed to access live round storage", new Error("no pool"));
+      }
+      const live = new LiveStore(this.pool);
+      // Wrap at this boundary so the focused repository never imports PgStore.
+      // Domain/validation failures pass through untouched so routes can map
+      // them to 400/404/409; only infrastructure failures become PersistenceError.
+      const run = async <T>(operation: () => Promise<T>): Promise<T> => {
+        try {
+          return await operation();
+        } catch (err) {
+          if (err instanceof AssetError || err instanceof PersistenceError) throw err;
+          if (isLivePassthrough((err as Error).message)) throw err;
+          throw pgError("failed to persist live round", err);
+        }
+      };
+      this.liveRepository = {
+        getLive: (auctionId) => run(() => live.getLive(auctionId)),
+        sendNext: (auctionId) => run(() => live.sendNext(auctionId)),
+        confirmBid: (auctionId, team, contributions) =>
+          run(() => live.confirmBid(auctionId, team, contributions)),
+        pass: (auctionId) => run(() => live.pass(auctionId)),
+      };
+    }
+    return this.liveRepository;
   }
 
   static async connect(url: string): Promise<PgStore> {

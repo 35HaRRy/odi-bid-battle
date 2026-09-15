@@ -11,6 +11,32 @@ describe("live council entry", () => {
       "liveWaiting",
       "liveLockedNote",
       "startFailed",
+      "sendNext",
+      "confirmBid",
+      "contribution",
+      "remaining",
+      "turnHere",
+      "waitingTurn",
+      "latestBid",
+      "noBid",
+      "activeCandidate",
+      "draftBid",
+      "confirmedBid",
+      "acquired",
+      "noneAcquired",
+      "pass",
+      "passHint",
+      "awaitCandidate",
+      "awaitHint",
+      "bidError",
+      "contributionError",
+      "notYourTurn",
+      "cannotBid",
+      "noActiveRound",
+      "noGold",
+      "fullCapacity",
+      "processed",
+      "skipped",
     ]) {
       expect(t("tr", k)).not.toBe(k);
       expect(t("en", k)).not.toBe(k);
@@ -19,6 +45,13 @@ describe("live council entry", () => {
 
   it("exposes startAuction client", () => {
     expect(typeof api.startAuction).toBe("function");
+  });
+
+  it("exposes live round clients", () => {
+    expect(typeof api.getLive).toBe("function");
+    expect(typeof api.sendNextCandidate).toBe("function");
+    expect(typeof api.confirmBid).toBe("function");
+    expect(typeof api.passCandidate).toBe("function");
   });
 
   it("calls POST /auctions/:id/start", async () => {
@@ -34,6 +67,54 @@ describe("live council entry", () => {
     try {
       const res = await api.startAuction("auc-1");
       expect(res.status).toBe("ongoing");
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("calls GET /auctions/:id/live", async () => {
+    const orig = globalThis.fetch;
+    // @ts-expect-error stub
+    globalThis.fetch = async (url: string, init?: RequestInit) => {
+      expect(String(url)).toContain("/auctions/auc-1/live");
+      expect(init?.method ?? "GET").not.toBe("POST");
+      return new Response(
+        JSON.stringify({
+          auctionId: "auc-1",
+          active: false,
+          activeCandidateId: null,
+          turn: 0,
+          contributions: [[0], [0]],
+          teams: [],
+        }),
+        { status: 200 },
+      );
+    };
+    try {
+      const res = await api.getLive("auc-1");
+      expect(res.active).toBe(false);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("posts bids with team and contributions", async () => {
+    const orig = globalThis.fetch;
+    let seen: unknown = null;
+    // @ts-expect-error stub
+    globalThis.fetch = async (url: string, init?: RequestInit) => {
+      expect(String(url)).toContain("/auctions/auc-1/live/bids");
+      expect(init?.method).toBe("POST");
+      seen = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({ latest: { team: 0, amount: 5 } }),
+        { status: 200 },
+      );
+    };
+    try {
+      const res = await api.confirmBid("auc-1", 0, [2, 3]);
+      expect(seen).toMatchObject({ team: 0, contributions: [2, 3] });
+      expect(res.latest).toMatchObject({ team: 0, amount: 5 });
     } finally {
       globalThis.fetch = orig;
     }

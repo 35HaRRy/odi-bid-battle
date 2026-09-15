@@ -5,6 +5,7 @@ import { PgStore } from "./store.js";
 import { AssetError } from "./battlefield-domain.js";
 import { StartValidationError } from "./domain.js";
 import { assetErrorHttp, mountBattlefieldRoutes } from "./battlefield-routes.js";
+import { mountLiveRoutes } from "./live-routes.js";
 import { mountTeamRoutes } from "./team-routes.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -49,6 +50,7 @@ export function buildApp(store: PgStore): express.Express {
   app.use(express.json({ limit: "15mb" }));
   mountBattlefieldRoutes(app, store);
   mountTeamRoutes(app, store);
+  mountLiveRoutes(app, store);
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
 

@@ -115,4 +115,51 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS idx_auctions_battlefield ON auctions(battlefield_id);
 
+-- Live bidding rounds (issue #8): alternating rounds with member
+-- contributions and strictly increasing confirmed bids. Confirming a bid
+-- deducts no gold; only a confirmed sale (later slice) deducts.
+-- Balances seed from member initial gold; acquired rows are written by sales.
+CREATE TABLE IF NOT EXISTS auction_live_state (
+  auction_id TEXT PRIMARY KEY REFERENCES auctions(id) ON DELETE CASCADE,
+  cursor INTEGER NOT NULL DEFAULT 0 CHECK (cursor >= 0),
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  active_candidate_id TEXT,
+  turn INTEGER NOT NULL DEFAULT 0 CHECK (turn IN (0, 1)),
+  special_pass BOOLEAN NOT NULL DEFAULT FALSE,
+  latest_team INTEGER CHECK (latest_team IN (0, 1)),
+  latest_amount INTEGER CHECK (latest_amount IS NULL OR latest_amount > 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS auction_live_balances (
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL REFERENCES auction_team_members(id) ON DELETE CASCADE,
+  balance INTEGER NOT NULL CHECK (balance >= 0),
+  PRIMARY KEY (auction_id, member_id)
+);
+CREATE TABLE IF NOT EXISTS auction_live_contributions (
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL REFERENCES auction_team_members(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL DEFAULT 0 CHECK (amount >= 0),
+  PRIMARY KEY (auction_id, member_id)
+);
+CREATE TABLE IF NOT EXISTS auction_live_latest (
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL REFERENCES auction_team_members(id) ON DELETE CASCADE,
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  PRIMARY KEY (auction_id, member_id)
+);
+CREATE TABLE IF NOT EXISTS auction_live_skipped (
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  candidate_id TEXT NOT NULL REFERENCES candidates(id),
+  position INTEGER NOT NULL,
+  PRIMARY KEY (auction_id, candidate_id)
+);
+CREATE TABLE IF NOT EXISTS auction_live_acquired (
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  candidate_id TEXT NOT NULL REFERENCES candidates(id),
+  team_position INTEGER NOT NULL CHECK (team_position IN (0, 1)),
+  price INTEGER NOT NULL CHECK (price > 0),
+  PRIMARY KEY (auction_id, candidate_id)
+);
+
 COMMIT;
