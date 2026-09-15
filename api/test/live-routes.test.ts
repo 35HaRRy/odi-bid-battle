@@ -112,6 +112,47 @@ describe.sequential("live bidding routes", () => {
     expect(duplicate.status).toBe(400);
   });
 
+  it("ends auctions explicitly after resolving all rounds (scenario 18)", async () => {
+    const early = await fetch(`${base}/auctions/${auctionId}/live/end`, { method: "POST" });
+    expect(early.status).toBe(400);
+
+    await fetch(`${base}/auctions/${auctionId}/live/next`, { method: "POST" });
+    const active = await fetch(`${base}/auctions/${auctionId}/live/end`, { method: "POST" });
+    expect(active.status).toBe(400);
+
+    // Resolve the open round, then sell all four candidates for 1 gold each.
+    await fetch(`${base}/auctions/${auctionId}/live/bids`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team: 0, contributions: [1] }),
+    });
+    await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" });
+    for (const team of [1, 0, 1]) {
+      await fetch(`${base}/auctions/${auctionId}/live/next`, { method: "POST" });
+      await fetch(`${base}/auctions/${auctionId}/live/bids`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ team, contributions: [1] }),
+      });
+      await fetch(`${base}/auctions/${auctionId}/live/sale`, { method: "POST" });
+    }
+    const ended = await (
+      await fetch(`${base}/auctions/${auctionId}/live/end`, { method: "POST" })
+    ).json();
+    expect(ended.status).toBe("completed");
+    expect(ended.readyToEnd).toBe(true);
+    expect(ended.cursor).toBe(4);
+
+    // Completed auctions stay readable but reject further progression.
+    const reopened = await (
+      await fetch(`${base}/auctions/${auctionId}/live`)
+    ).json();
+    expect(reopened.status).toBe("completed");
+    expect(
+      (await fetch(`${base}/auctions/${auctionId}/live/next`, { method: "POST" })).status,
+    ).toBe(409);
+  });
+
   it("maps draft auctions to 409 and missing auctions to 404", async () => {
     const draft = await (
       await fetch(`${base}/auctions`, {

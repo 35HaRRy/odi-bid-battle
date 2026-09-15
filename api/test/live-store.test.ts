@@ -11,6 +11,35 @@ const PNG = Buffer.from(
   "hex",
 );
 
+async function seedLiveAuctionWithGold(
+  store: PgStore,
+  goldA: number,
+  goldB: number,
+  candidateCount = 4,
+) {
+  const ids: string[] = [];
+  for (let i = 0; i < candidateCount; i++) {
+    const c = await store.saveCandidate(`Aday ${i}`, PNG, "image/png", `a${i}.png`);
+    ids.push(c.id);
+  }
+  const list = await store.saveList("Liste", false);
+  for (const id of ids) await store.addEntryToList(list.id, id);
+  const auction = await store.saveAuction("Divan", list.id);
+  const field = await store.battlefields.create(
+    { name: "Alan", geography: "Vadi", history: "Tarih" },
+    { buffer: PNG, mime: "image/png", name: "b.png" },
+  );
+  await store.battlefields.select(auction.id, field.id);
+  const flag = { buffer: PNG, mime: "image/png", name: "flag.png" };
+  const t1 = createAuctionTeam(auction.id, "Kuzey", 0, { flag, slogan: "Birlik" });
+  const t2 = createAuctionTeam(auction.id, "Guney", 1, { flag, slogan: "Guc" });
+  addTeamMember(t1, "Elif", goldA);
+  addTeamMember(t2, "Deniz", goldB);
+  await store.teams.saveAuctionTeams(auction.id, [t1, t2]);
+  await store.startAuction(auction.id);
+  return { auction, ids };
+}
+
 async function seedLiveAuction(store: PgStore) {
   const ids: string[] = [];
   for (let i = 0; i < 4; i++) {
@@ -155,6 +184,88 @@ describe("live round store", () => {
       await expect(store.live.sell(auction.id)).rejects.toThrow("no active round");
       await store.live.sendNext(auction.id);
       await expect(store.live.sell(auction.id)).rejects.toThrow("no confirmed bid");
+    } finally {
+      await store.close();
+    }
+  }, 30000);
+
+  it("scenario 10+18: ends explicitly only between resolved rounds; unpresented stay unassigned", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction, ids } = await seedLiveAuctionWithGold(store, 1, 1);
+      // Fresh auction is not ready to end.
+      await expect(store.live.endAuction(auction.id)).rejects.toThrow("termination not ready");
+      // Active round must resolve first.
+      await store.live.sendNext(auction.id);
+      await expect(store.live.endAuction(auction.id)).rejects.toThrow(
+        "active round must resolve",
+      );
+      // A buys candidate 1 for 1 gold.
+      await store.live.confirmBid(auction.id, 0, [1]);
+      await store.live.sell(auction.id);
+      // B buys candidate 2 for 1 gold; both budgets exhausted.
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 1, [1]);
+      await store.live.sell(auction.id);
+      // Remaining candidates cannot be presented.
+      await expect(store.live.sendNext(auction.id)).rejects.toThrow("no eligible team");
+      const ready = await store.live.getLive(auction.id);
+      expect(ready.readyToEnd).toBe(true);
+      expect(ready.cursor).toBe(2);
+      const ended = await store.live.endAuction(auction.id);
+      expect(ended.status).toBe("completed");
+      // Unpresented candidates remain unassigned, not skipped.
+      expect(ended.skipped).toEqual([]);
+      expect(ended.cursor).toBe(2);
+      expect(ids.length).toBe(4);
+      // Completed auctions stay readable but reject further progression.
+      const reopened = await store.live.getLive(auction.id);
+      expect(reopened.status).toBe("completed");
+      await expect(store.live.sendNext(auction.id)).rejects.toThrow("auction completed");
+      await expect(store.live.endAuction(auction.id)).rejects.toThrow("auction completed");
+    } finally {
+      await store.close();
+    }
+  }, 30000);
+
+  it("scenario 8: full team cannot bid; scheduled full team transfers the opening with a pass", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const { auction } = await seedLiveAuctionWithGold(store, 20, 20, 8);
+      // A wins the first four candidates: unanswered when scheduled,
+      // outbidding B otherwise.
+      for (let i = 0; i < 4; i++) {
+        const round = await store.live.sendNext(auction.id);
+        if (round.turn === 0) {
+          await store.live.confirmBid(auction.id, 0, [1]);
+        } else {
+          await store.live.confirmBid(auction.id, 1, [1]);
+          await store.live.confirmBid(auction.id, 0, [2]);
+        }
+        const sold = await store.live.sell(auction.id);
+        expect(sold.teams[0].acquiredCount).toBe(i + 1);
+      }
+      let live = await store.live.getLive(auction.id);
+      expect(live.capacity).toBe(4);
+      expect(live.teams[0].acquiredCount).toBe(4);
+      // Cursor 4 schedules A, but A is full: the opening transfers to B.
+      const opened = await store.live.sendNext(auction.id);
+      expect(opened.turn).toBe(1);
+      expect(opened.specialPass).toBe(true);
+      // B passes; the candidate stays unassigned and is never repeated.
+      const skipped = opened.activeCandidateId;
+      const passed = await store.live.pass(auction.id);
+      expect(passed.skipped).toEqual([skipped]);
+      expect(passed.cursor).toBe(5);
+      expect(passed.capacity).toBe(4);
+      // B opens the next round, then A cannot respond at full capacity.
+      await store.live.sendNext(auction.id);
+      await store.live.confirmBid(auction.id, 1, [1]);
+      await expect(store.live.confirmBid(auction.id, 0, [1])).rejects.toThrow(
+        "team cannot bid",
+      );
+      live = await store.live.getLive(auction.id);
+      expect(live.capacity).toBe(4);
     } finally {
       await store.close();
     }

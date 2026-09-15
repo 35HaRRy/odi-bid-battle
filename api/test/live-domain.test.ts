@@ -3,6 +3,7 @@ import {
   completeSale,
   confirmBid,
   emptyRoundState,
+  isReadyToEnd,
   isTeamEligible,
   passCandidate,
   scheduledTeam,
@@ -10,7 +11,7 @@ import {
   teamCapacity,
 } from "../src/live-domain.js";
 
-describe("live bidding rounds (spec 4, 5, 6.1-6.3)", () => {
+describe("live bidding rounds (spec 4, 5, 6, 7.2)", () => {
   it("schedules odd positions to panel 1 and even positions to panel 2", () => {
     expect(scheduledTeam(0)).toBe(0);
     expect(scheduledTeam(1)).toBe(1);
@@ -158,6 +159,92 @@ describe("live bidding rounds (spec 4, 5, 6.1-6.3)", () => {
     const opened = sendNextCandidate(s, ["c1", "c2"], [true, true], [1, 1]);
     if (!opened.ok) throw new Error("open failed");
     expect(completeSale(opened.state).ok).toBe(false);
+  });
+
+  it("scenario 8: capacity stays fixed on skips and full teams cannot bid", () => {
+    expect(teamCapacity(8)).toBe(4);
+    // Skips do not reduce capacity: still 4 with 8 initial candidates.
+    let s = emptyRoundState([1, 1]);
+    const opened = sendNextCandidate(
+      s,
+      ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"],
+      [false, true],
+      [1, 1],
+    );
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    // Scheduled A is full (4/8); eligible B receives the opening and may pass.
+    expect(opened.state.turn).toBe(1);
+    expect(opened.state.specialPass).toBe(true);
+    expect(passCandidate(opened.state).ok).toBe(true);
+    expect(teamCapacity(8)).toBe(4);
+    // A full team cannot bid even with gold remaining.
+    s = opened.state;
+    expect(
+      confirmBid(0, { ...s, turn: 0, specialPass: false }, [1], [5], false).ok,
+    ).toBe(false);
+  });
+
+  it("scenario 9/10/18: termination is ready only between resolved rounds", () => {
+    // Scenario 9: full-capacity A with gold + gold-less B, mid-list.
+    expect(
+      isReadyToEnd({
+        active: false,
+        latest: null,
+        cursor: 5,
+        candidateCount: 8,
+        eligible: [false, false],
+      }),
+    ).toBe(true);
+    // Scenario 10: both budgets exhausted with unpresented candidates left.
+    expect(
+      isReadyToEnd({
+        active: false,
+        latest: null,
+        cursor: 2,
+        candidateCount: 4,
+        eligible: [false, false],
+      }),
+    ).toBe(true);
+    // Scenario 18: last candidate processed enables ending.
+    expect(
+      isReadyToEnd({
+        active: false,
+        latest: null,
+        cursor: 4,
+        candidateCount: 4,
+        eligible: [true, true],
+      }),
+    ).toBe(true);
+    // Not ready while a round is active or a confirmed bid is unsettled.
+    expect(
+      isReadyToEnd({
+        active: true,
+        latest: null,
+        cursor: 4,
+        candidateCount: 4,
+        eligible: [true, true],
+      }),
+    ).toBe(false);
+    expect(
+      isReadyToEnd({
+        active: false,
+        latest: { team: 0, amount: 5, contributions: [5] },
+        cursor: 4,
+        candidateCount: 4,
+        eligible: [true, true],
+      }),
+    ).toBe(false);
+    // Not ready when candidates remain and a team can still buy.
+    expect(
+      isReadyToEnd({
+        active: false,
+        latest: null,
+        cursor: 2,
+        candidateCount: 8,
+        eligible: [true, false],
+      }),
+    ).toBe(false);
   });
 
   it("refuses to open when neither team is eligible", () => {

@@ -1,4 +1,4 @@
-// Pure bidding-round rules for issue #8 (spec sections 4, 5, 6.1-6.3).
+// Pure bidding-round rules for issues #8-#10 (spec sections 4, 5, 6, 7.2).
 // No I/O here so scenarios 2, 3, 4, 6, 7 can be tested with fixtures,
 // including depleted balances that only arise after settled sales (#9).
 
@@ -199,6 +199,26 @@ export function completeSale(state: LiveRoundState): SaleResult {
       skipped: [...state.skipped],
     },
   };
+}
+
+/**
+ * Termination readiness (spec 7.2, issue #10).
+ * Evaluated only after the active round resolves: no active candidate and
+ * no unsettled confirmed bid. Ready when no unprocessed candidates remain
+ * or when neither team is eligible (gold and free capacity).
+ * Unpresented candidates stay unassigned; they are never marked skipped.
+ */
+export function isReadyToEnd(args: {
+  active: boolean;
+  latest: LiveLatestBid | null;
+  cursor: number;
+  candidateCount: number;
+  eligible: [boolean, boolean];
+}): boolean {
+  if (args.active) return false;
+  if (args.latest) return false;
+  if (args.cursor >= args.candidateCount) return true;
+  return !args.eligible[0] && !args.eligible[1];
 }
 
 export type PassResult =

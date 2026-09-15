@@ -33,6 +33,13 @@ function errorKey(message: string): string | null {
   if (/team cannot bid/.test(message)) return "cannotBid";
   if (/no confirmed bid/.test(message)) return "saleError";
   if (/no active round/.test(message)) return "noActiveRound";
+  if (/pass not allowed/.test(message)) return "passError";
+  if (/active round must resolve/.test(message)) return "resolveFirst";
+  if (/settle confirmed bid/.test(message)) return "settleFirst";
+  if (/termination not ready/.test(message)) return "endNotReady";
+  if (/auction completed/.test(message)) return "auctionEnded";
+  if (/no eligible team/.test(message)) return "noEligible";
+  if (/no remaining candidates/.test(message)) return "noRemaining";
   return null;
 }
 
@@ -51,6 +58,7 @@ export function LiveCouncil({
   const [actionError, setActionError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [saleOpen, setSaleOpen] = useState(false);
+  const [endOpen, setEndOpen] = useState(false);
 
   // Match the approved prototype: the live council renders inside the
   // compact live shell while mounted.
@@ -108,12 +116,13 @@ export function LiveCouncil({
     };
   }, [live?.activeCandidateId]);
 
-  async function run(action: () => Promise<LiveState>) {
+  async function run(action: () => Promise<LiveState>, onSuccess?: () => void) {
     if (pending) return;
     setPending(true);
     setActionError(null);
     try {
       await refreshAfter(action);
+      onSuccess?.();
     } catch (e) {
       if (e instanceof ApiError) {
         const key = errorKey(e.message);
@@ -133,22 +142,11 @@ export function LiveCouncil({
   }
 
   async function confirmSale() {
-    if (pending) return;
-    setPending(true);
-    setActionError(null);
-    try {
-      await refreshAfter(() => api.completeSale(auction.id));
-      setSaleOpen(false);
-    } catch (e) {
-      if (e instanceof ApiError) {
-        const key = errorKey(e.message);
-        setActionError(key ? t(lang, key) : e.message);
-      } else {
-        setActionError(t(lang, "persistFail"));
-      }
-    } finally {
-      setPending(false);
-    }
+    await run(() => api.completeSale(auction.id), () => setSaleOpen(false));
+  }
+
+  async function confirmEnd() {
+    await run(() => api.endAuction(auction.id), () => setEndOpen(false));
   }
 
   if (!live) {
@@ -175,13 +173,18 @@ export function LiveCouncil({
   const total = (pos: 0 | 1) =>
     (drafts[pos] ?? []).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
 
+  const ended = live.status === "completed";
+  const endReason =
+    live.cursor >= auction.entries.length ? "noRemaining" : "noEligible";
+
   return (
     <section className="live-scene" aria-label={t(lang, "liveCouncilTitle")}>
       <header className="live-heading">
         <div>
           <h1>{auction.name}</h1>
           <p>
-            {t(lang, "liveCouncilTitle")} · {live.cursor} / {auction.entries.length}
+            {t(lang, ended ? "endedState" : "liveCouncilTitle")} · {live.cursor} /{" "}
+            {auction.entries.length}
           </p>
         </div>
       </header>
@@ -207,20 +210,56 @@ export function LiveCouncil({
         <section className="live-center" aria-label={t(lang, "activeCandidate")}>
           {!live.active ? (
             <>
-              <div className="waiting">
-                <h2>{t(lang, "awaitCandidate")}</h2>
-                <p>{t(lang, "awaitHint")}</p>
-              </div>
-              <div className="live-center-actions">
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={pending}
-                  onClick={() => run(() => api.sendNextCandidate(auction.id))}
-                >
-                  {t(lang, "sendNext")}
-                </button>
-              </div>
+              {ended ? (
+                <>
+                  <div className="waiting">
+                    <h2>{t(lang, "endedTitle")}</h2>
+                  </div>
+                  <div className="live-center-actions">
+                    {/* Final presentation screen lands with #12; the control appears here. */}
+                    <button type="button" className="primary" disabled>
+                      {t(lang, "battleBegin")}
+                    </button>
+                  </div>
+                </>
+              ) : live.readyToEnd ? (
+                <>
+                  <div className="waiting">
+                    <h2>{t(lang, "readyEnd")}</h2>
+                    <p>{t(lang, endReason)}</p>
+                  </div>
+                  <div className="live-center-actions">
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={pending}
+                      onClick={() => {
+                        setActionError(null);
+                        setEndOpen(true);
+                      }}
+                    >
+                      {t(lang, "endAuction")}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="waiting">
+                    <h2>{t(lang, "awaitCandidate")}</h2>
+                    <p>{t(lang, "awaitHint")}</p>
+                  </div>
+                  <div className="live-center-actions">
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={pending}
+                      onClick={() => run(() => api.sendNextCandidate(auction.id))}
+                    >
+                      {t(lang, "sendNext")}
+                    </button>
+                  </div>
+                </>
+              )}
             </>
           ) : (
             <>
@@ -357,7 +396,44 @@ export function LiveCouncil({
           </dialog>
         </Modal>
       )}
-      {actionError && !saleOpen && (
+      {endOpen && !live.active && !ended && (
+        <Modal
+          titleId="end-dialog-title"
+          onClose={() => {
+            if (!pending) setEndOpen(false);
+          }}
+        >
+          <dialog className="app-dialog" aria-labelledby="end-dialog-title">
+            <h2 id="end-dialog-title">{t(lang, "endTitle")}</h2>
+            <p>{t(lang, "endExplain")}</p>
+            {actionError && (
+              <p className="field-error" role="alert">
+                {actionError}
+              </p>
+            )}
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={pending}
+                onClick={() => setEndOpen(false)}
+                autoFocus
+              >
+                {t(lang, "cancel")}
+              </button>
+              <button
+                type="button"
+                className="danger"
+                disabled={pending}
+                onClick={confirmEnd}
+              >
+                {t(lang, "endAuction")}
+              </button>
+            </div>
+          </dialog>
+        </Modal>
+      )}
+      {actionError && !saleOpen && !endOpen && (
         <p className="field-error" role="alert">
           {actionError}
         </p>
@@ -400,13 +476,22 @@ function LiveTeamPane({
 }) {
   const team = live.teams[pos];
   const full = team.acquiredCount >= live.capacity;
+  const noGold = team.remainingGold === 0;
   const turnText = full
     ? "fullCapacity"
-    : team.remainingGold === 0
+    : noGold
       ? "noGold"
       : active
         ? "turnHere"
         : "waitingTurn";
+  // Match the prototype: exhausted capacity/gold stays visible between
+  // rounds, and ended councils show the completed state.
+  const statusText =
+    live.status === "completed"
+      ? "endedState"
+      : live.active || full || noGold
+        ? turnText
+        : "awaitCandidate";
   return (
     <section className="live-team" aria-label={team.name}>
       <header className="live-team-head">
@@ -428,7 +513,7 @@ function LiveTeamPane({
         </strong>
       </div>
       <div className={`live-turn ${full || !eligible ? "critical" : active ? "" : "muted"}`}>
-        {live.active ? t(lang, turnText) : t(lang, "awaitCandidate")}
+        {t(lang, statusText)}
       </div>
       <div className="live-columns">
         <span>{t(lang, "memberName")}</span>

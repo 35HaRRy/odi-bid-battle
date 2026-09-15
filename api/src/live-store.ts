@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import {
   completeSale as completeSalePure,
   confirmBid as confirmBidPure,
+  isReadyToEnd,
   isTeamEligible,
   passCandidate as passPure,
   sendNextCandidate as sendPure,
@@ -33,6 +34,7 @@ export interface LiveTeamView {
 
 export interface LiveView {
   auctionId: string;
+  status: "ongoing" | "completed";
   cursor: number;
   active: boolean;
   activeCandidateId: string | null;
@@ -42,6 +44,7 @@ export interface LiveView {
   contributions: number[][];
   skipped: string[];
   capacity: number;
+  readyToEnd: boolean;
   teams: LiveTeamView[];
 }
 
@@ -59,6 +62,9 @@ const LIVE_ERRORS = new Set([
   "pass not allowed",
   "no active candidate",
   "no confirmed bid",
+  "active round must resolve",
+  "settle confirmed bid",
+  "termination not ready",
 ]);
 
 export function isLiveError(message: string): boolean {
@@ -84,13 +90,23 @@ export class LiveStore {
   constructor(private readonly pool: Pool) {}
 
   private async requireOngoing(auctionId: string): Promise<{ entries: string[]; status: string }> {
+    return this.requireLive(auctionId, false);
+  }
+
+  private async requireLive(
+    auctionId: string,
+    allowCompleted: boolean,
+  ): Promise<{ entries: string[]; status: string }> {
     const head = await this.pool.query<{ status: string }>(
       "SELECT status FROM auctions WHERE id=$1",
       [auctionId],
     );
     if (head.rows.length === 0) throw new Error("auction not found");
     if (head.rows[0].status === "draft") throw new Error("auction not started");
-    if (head.rows[0].status !== "ongoing") throw new Error("auction completed");
+    if (head.rows[0].status === "completed" && !allowCompleted)
+      throw new Error("auction completed");
+    if (head.rows[0].status !== "ongoing" && head.rows[0].status !== "completed")
+      throw new Error("auction completed");
     const e = await this.pool.query<{ candidate_id: string }>(
       "SELECT candidate_id FROM auction_entries WHERE auction_id=$1 ORDER BY position",
       [auctionId],
@@ -265,11 +281,48 @@ export class LiveStore {
       .reduce((sum, m) => sum + (balances.get(m.id) ?? m.initial_gold), 0);
   }
 
+  private async readiness(
+    auctionId: string,
+    entries: string[],
+    teams: TeamRow[],
+    members: MemberRow[],
+    balances: Map<string, number>,
+    state: LiveRoundState,
+  ): Promise<{ eligible: [boolean, boolean]; readyToEnd: boolean }> {
+    const acquiredCount = await this.acquiredCounts(auctionId);
+    const eligible = [0, 1].map((pos) => {
+      const team = teams.find((t) => t.position === pos)!;
+      return isTeamEligible(
+        this.teamGold(members, balances, team.id),
+        acquiredCount[pos],
+        entries.length,
+      );
+    }) as [boolean, boolean];
+    return {
+      eligible,
+      readyToEnd: isReadyToEnd({
+        active: state.active,
+        latest: state.latest,
+        cursor: state.cursor,
+        candidateCount: entries.length,
+        eligible,
+      }),
+    };
+  }
+
   async getLive(auctionId: string): Promise<LiveView> {
-    const { entries } = await this.requireOngoing(auctionId);
+    const { entries, status } = await this.requireLive(auctionId, true);
     const { teams, members } = await this.loadTeams(auctionId);
     const balances = await this.ensureBalances(auctionId, members);
     const state = await this.readState(auctionId);
+    const { readyToEnd } = await this.readiness(
+      auctionId,
+      entries,
+      teams,
+      members,
+      balances,
+      state,
+    );
     const acquired = await this.pool.query<{
       candidate_id: string;
       team_position: number;
@@ -314,6 +367,7 @@ export class LiveStore {
     });
     return {
       auctionId,
+      status: status as "ongoing" | "completed",
       cursor: state.cursor,
       active: state.active,
       activeCandidateId: state.activeCandidateId,
@@ -323,6 +377,7 @@ export class LiveStore {
       contributions: state.contributions,
       skipped: state.skipped,
       capacity,
+      readyToEnd,
       teams: views,
     };
   }
@@ -487,6 +542,28 @@ export class LiveStore {
     } finally {
       client.release();
     }
+    return this.getLive(auctionId);
+  }
+
+  async endAuction(auctionId: string): Promise<LiveView> {
+    const { entries } = await this.requireOngoing(auctionId);
+    const { teams, members } = await this.loadTeams(auctionId);
+    const balances = await this.ensureBalances(auctionId, members);
+    const state = await this.readState(auctionId);
+    if (state.active) throw new Error("active round must resolve");
+    if (state.latest) throw new Error("settle confirmed bid");
+    const { readyToEnd } = await this.readiness(
+      auctionId,
+      entries,
+      teams,
+      members,
+      balances,
+      state,
+    );
+    if (!readyToEnd) throw new Error("termination not ready");
+    await this.pool.query("UPDATE auctions SET status='completed', updated_at=now() WHERE id=$1", [
+      auctionId,
+    ]);
     return this.getLive(auctionId);
   }
 

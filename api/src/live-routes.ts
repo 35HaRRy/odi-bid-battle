@@ -49,4 +49,6 @@ export function mountLiveRoutes(app: Express, store: PgStore): void {
   app.post("/auctions/:id/live/pass", handle((id) => live.pass(id)));
 
   app.post("/auctions/:id/live/sale", handle((id) => live.sell(id)));
+
+  app.post("/auctions/:id/live/end", handle((id) => live.endAuction(id)));
 }

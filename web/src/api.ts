@@ -117,6 +117,7 @@ export interface LiveTeam {
 }
 export interface LiveState {
   auctionId: string;
+  status: "ongoing" | "completed";
   cursor: number;
   active: boolean;
   activeCandidateId: string | null;
@@ -126,6 +127,7 @@ export interface LiveState {
   contributions: number[][];
   skipped: string[];
   capacity: number;
+  readyToEnd: boolean;
   teams: LiveTeam[];
 }
 
@@ -490,6 +492,12 @@ export const api = {
   async completeSale(auctionId: string): Promise<LiveState> {
     const r = await check(
       await fetch(`${BASE}/auctions/${auctionId}/live/sale`, { method: "POST" }),
+    );
+    return r.json();
+  },
+  async endAuction(auctionId: string): Promise<LiveState> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/live/end`, { method: "POST" }),
     );
     return r.json();
   },

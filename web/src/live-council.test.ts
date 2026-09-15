@@ -43,6 +43,19 @@ describe("live council entry", () => {
       "saleError",
       "processed",
       "skipped",
+      "endedTitle",
+      "readyEnd",
+      "noRemaining",
+      "noEligible",
+      "endAuction",
+      "endTitle",
+      "endExplain",
+      "battleBegin",
+      "resolveFirst",
+      "settleFirst",
+      "endNotReady",
+      "auctionEnded",
+      "passError",
     ]) {
       expect(t("tr", k)).not.toBe(k);
       expect(t("en", k)).not.toBe(k);
@@ -59,6 +72,7 @@ describe("live council entry", () => {
     expect(typeof api.confirmBid).toBe("function");
     expect(typeof api.passCandidate).toBe("function");
     expect(typeof api.completeSale).toBe("function");
+    expect(typeof api.endAuction).toBe("function");
   });
 
   it("calls POST /auctions/:id/start", async () => {
@@ -122,6 +136,24 @@ describe("live council entry", () => {
       const res = await api.confirmBid("auc-1", 0, [2, 3]);
       expect(seen).toMatchObject({ team: 0, contributions: [2, 3] });
       expect(res.latest).toMatchObject({ team: 0, amount: 5 });
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("posts termination to /auctions/:id/live/end", async () => {
+    const orig = globalThis.fetch;
+    // @ts-expect-error stub
+    globalThis.fetch = async (url: string, init?: RequestInit) => {
+      expect(String(url)).toContain("/auctions/auc-1/live/end");
+      expect(init?.method).toBe("POST");
+      return new Response(JSON.stringify({ status: "completed", cursor: 4 }), {
+        status: 200,
+      });
+    };
+    try {
+      const res = await api.endAuction("auc-1");
+      expect(res.status).toBe("completed");
     } finally {
       globalThis.fetch = orig;
     }
