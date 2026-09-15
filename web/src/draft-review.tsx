@@ -41,9 +41,7 @@ export function DraftReview({
   resolveName,
   onGoStep,
   onReadiness,
-  startPending,
   startErrors,
-  onStart,
 }: {
   lang: Lang;
   auction: Auction;
@@ -53,9 +51,7 @@ export function DraftReview({
   resolveName: (id: string) => string;
   onGoStep: (step: number) => void;
   onReadiness?: (ready: boolean) => void;
-  startPending: boolean;
   startErrors: FieldError[];
-  onStart: () => void;
 }) {
   const [teams, setTeams] = useState<SavedTeam[] | null>(null);
   const [battlefield, setBattlefield] = useState<DraftBattlefield | null>(null);
@@ -250,15 +246,6 @@ export function DraftReview({
               </ul>
             </div>
           )}
-          <button
-            type="button"
-            className="primary"
-            disabled={!ready || startPending}
-            title={ready ? undefined : t(lang, "startDisabledNote")}
-            onClick={onStart}
-          >
-            {t(lang, "start")}
-          </button>
           {!ready && <p className="description">{t(lang, "startDisabledNote")}</p>}
         </aside>
       </div>

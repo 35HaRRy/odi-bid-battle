@@ -271,23 +271,34 @@ export function BattlefieldPreparation({
   const bgFileInputRef = useRef<HTMLInputElement>(null);
   const draftFileInputRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [detailH, setDetailH] = useState<number | null>(null);
 
-  // Keep the left card list exactly as tall as the right detail column.
+  // Keep the left card list exactly as tall as the right detail column,
+  // floored to a single battlefield option so empty detail never crushes list.
   useEffect(() => {
     const el = detailRef.current;
     if (!el) return;
     const mq = window.matchMedia("(min-width: 801px)");
-    const sync = () => setDetailH(mq.matches ? el.offsetHeight : null);
+    const sync = () => {
+      if (!mq.matches) {
+        setDetailH(null);
+        return;
+      }
+      const single = listRef.current?.querySelector<HTMLElement>(".battle-option");
+      const minH = single?.offsetHeight ?? 0;
+      setDetailH(Math.max(el.offsetHeight, minH));
+    };
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(el);
+    if (listRef.current) ro.observe(listRef.current);
     mq.addEventListener("change", sync);
     return () => {
       ro.disconnect();
       mq.removeEventListener("change", sync);
     };
-  }, []);
+  }, [battlefields.length, draft?.battlefieldId]);
 
   const loadDraft = async (battlefieldId: string | null) => {
     if (!battlefieldId) {
@@ -455,6 +466,7 @@ export function BattlefieldPreparation({
       {error && <div style={{ color: "var(--red)", marginBottom: "12px" }}>{error}</div>}
       <div className="battle-layout">
         <div
+          ref={listRef}
           className="battle-select-scroll"
           tabIndex={0}
           aria-label={t(lang, "battlefields")}

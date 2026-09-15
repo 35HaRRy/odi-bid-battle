@@ -1406,9 +1406,7 @@ function AuctionWorkspace({
                 resolveName={resolveDraftName}
                 onGoStep={setDraftStep}
                 onReadiness={setReviewReady}
-                startPending={startPending}
                 startErrors={startErrors}
-                onStart={handleStart}
               />
             )}
             {!isLive && (
