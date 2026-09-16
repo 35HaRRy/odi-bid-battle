@@ -258,7 +258,7 @@ describe("battlefield persistence", () => {
 describe("background persistence", () => {
   it("reads auction metadata without transferring background columns", async () => {
     const draft = await store.saveAuction("Metadata", null);
-    const buffer = Buffer.alloc(5 * 1024 * 1024);
+    const buffer = Buffer.alloc(3_000_000);
     image.buffer.copy(buffer);
     await assets.setBackground(draft.id, { ...image, buffer });
     const returnedColumns: string[][] = [];

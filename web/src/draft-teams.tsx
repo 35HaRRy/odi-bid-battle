@@ -107,8 +107,13 @@ export function DraftTeams({
           setTeams([blankTeam(0), blankTeam(1)]);
         }
       })
-      .catch(() => {
-        if (!cancelled) setLoadError(t(lang, "persistFail"));
+      .catch((e) => {
+        if (!cancelled)
+          setLoadError(
+            e instanceof ApiError && e.status === 413
+              ? t(lang, "teamsTooLarge")
+              : t(lang, "persistFail"),
+          );
       });
     return () => {
       cancelled = true;

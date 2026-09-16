@@ -191,7 +191,16 @@ export class PgStore {
   }
 
   static async connect(url: string): Promise<PgStore> {
-    const pool = new Pool({ connectionString: url });
+    // Small per-instance pool: serverless instances scale out horizontally,
+    // so each one holds at most a couple of connections and lets Neon's
+    // pooled endpoint multiplex them. Short idle timeouts keep suspended
+    // instances from hoarding connections.
+    const pool = new Pool({
+      connectionString: url,
+      max: 2,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+    });
     try {
       await pool.query("SELECT 1");
     } catch (err) {

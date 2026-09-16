@@ -41,6 +41,8 @@ export function validateBattlefield(fields: BattlefieldFields): BattlefieldField
   return result;
 }
 
+import { SINGLE_FILE_LIMIT_BYTES } from "./limits.js";
+
 // Shared upload policy for battlefield and background images. Trusted bundled
 // defaults are not uploads and do not pass through this validator.
 export function validateAssetImage(image: AssetImage): AssetImage {
@@ -48,7 +50,7 @@ export function validateAssetImage(image: AssetImage): AssetImage {
   const { buffer, mime } = image;
   if (!Buffer.isBuffer(buffer)) throw new AssetError("invalid image");
   if (buffer.length === 0) throw new AssetError("image required");
-  if (buffer.length > 5 * 1024 * 1024) throw new AssetError("image too large");
+  if (buffer.length > SINGLE_FILE_LIMIT_BYTES) throw new AssetError("image too large");
 
   let matches = false;
   switch (mime) {

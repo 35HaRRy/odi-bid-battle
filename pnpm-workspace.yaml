@@ -1,0 +1,17 @@
+packages:
+  - api
+  - web
+  - db
+
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild
+
+# Single express-types lineage on every pnpm major: mixed
+# @types/express(-serve-static-core) copies break the Express interface
+# (app.get/post vanish) in the Vercel function type-check.
+overrides:
+  "@types/express": "4.17.25"
+  "@types/express-serve-static-core": "4.19.9"

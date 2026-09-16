@@ -1,3 +1,5 @@
+import { isFileTooLarge, isJsonTooLarge } from "./limits";
+
 const BASE =
   (import.meta as unknown as { env: Record<string, string> }).env
     .VITE_API_URL ?? "http://localhost:3001";
@@ -14,14 +16,36 @@ export class ApiError extends Error {
 
 async function check(res: Response): Promise<Response> {
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError(
-      res.status,
-      (body as { error?: string }).error ?? `http ${res.status}`,
-      body,
-    );
+    // The platform can reject over-budget bodies before the app runs and
+    // answers with a non-JSON (HTML/text) 413. Surface that as the same
+    // friendly payload error the backend returns.
+    const body = await res.json().catch(() => null);
+    if (body && typeof body === "object") {
+      throw new ApiError(
+        res.status,
+        (body as { error?: string }).error ?? `http ${res.status}`,
+        body,
+      );
+    }
+    if (res.status === 413) {
+      throw new ApiError(res.status, "payload too large", null);
+    }
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text || `http ${res.status}`, null);
   }
   return res;
+}
+
+function assertFileBudget(file: File | null | undefined): void {
+  if (isFileTooLarge(file)) {
+    throw new ApiError(413, "image too large", null);
+  }
+}
+
+function assertJsonBudget(value: unknown): void {
+  if (isJsonTooLarge(value)) {
+    throw new ApiError(413, "payload too large", null);
+  }
 }
 
 export interface Candidate {
@@ -168,6 +192,7 @@ export const api = {
     name: string,
     file: File | null,
   ): Promise<Candidate> {
+    assertFileBudget(file);
     const r = await check(
       await fetch(`${BASE}/candidates/${id}/edit`, {
         method: "POST",
@@ -177,6 +202,7 @@ export const api = {
     return r.json();
   },
   async createCandidate(name: string, file: File): Promise<Candidate> {
+    assertFileBudget(file);
     const fd = new FormData();
     fd.append("name", name);
     fd.append("image", file);
@@ -258,6 +284,7 @@ export const api = {
     name: string,
     file: File | null,
   ): Promise<{ candidate: Candidate; list: CandidateList }> {
+    assertFileBudget(file);
     const r = await check(
       await fetch(`${BASE}/lists/${listId}/entries/${candidateId}/edit`, {
         method: "POST",
@@ -360,6 +387,7 @@ export const api = {
     name: string,
     file: File | null,
   ): Promise<{ candidate: Candidate; auction: Auction }> {
+    assertFileBudget(file);
     const r = await check(
       await fetch(
         `${BASE}/auctions/${auctionId}/entries/${candidateId}/edit`,
@@ -380,6 +408,7 @@ export const api = {
     fields: { name: string; geography: string; history: string },
     file: File,
   ): Promise<BattlefieldSummary> {
+    assertFileBudget(file);
     const fd = new FormData();
     fd.append("name", fields.name);
     fd.append("geography", fields.geography);
@@ -395,6 +424,7 @@ export const api = {
     fields: { name: string; geography: string; history: string },
     file: File | null,
   ): Promise<BattlefieldSummary> {
+    assertFileBudget(file);
     const fd = new FormData();
     fd.append("name", fields.name);
     fd.append("geography", fields.geography);
@@ -422,6 +452,7 @@ export const api = {
     fields: { geography: string; history: string },
     file: File | null,
   ): Promise<DraftBattlefield> {
+    assertFileBudget(file);
     const fd = new FormData();
     fd.append("geography", fields.geography);
     fd.append("history", fields.history);
@@ -448,6 +479,7 @@ export const api = {
     return r.json();
   },
   async saveAuctionBackground(auctionId: string, file: File): Promise<void> {
+    assertFileBudget(file);
     const fd = new FormData();
     fd.append("image", file);
     await check(
@@ -469,6 +501,7 @@ export const api = {
     return r.json();
   },
   async saveAuctionTeams(auctionId: string, teams: TeamPayload[]): Promise<SavedTeam[]> {
+    assertJsonBudget({ teams });
     const r = await check(
       await fetch(`${BASE}/auctions/${auctionId}/teams`, {
         method: "POST",

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
-import { buildApp } from "../src/server.js";
+import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
 import { addTeamMember, createAuctionTeam } from "../src/domain.js";
 

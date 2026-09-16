@@ -1,11 +1,13 @@
 {
   "name": "odi-bid-battle",
   "private": true,
+  "packageManager": "pnpm@11.20.0",
   "type": "module",
   "workspaces": ["api", "web"],
   "scripts": {
-    "typecheck": "npm run typecheck -w api && npm run typecheck -w web",
-    "test": "npm run test -w api && npm run test -w web",
+    "dev": "docker compose up -d db && pnpm --parallel --filter odi-bid-battle-api --filter odi-bid-battle-web run dev",
+    "typecheck": "pnpm --filter odi-bid-battle-api --filter odi-bid-battle-web run typecheck",
+    "test": "pnpm --filter odi-bid-battle-api --filter odi-bid-battle-web run test",
     "db:up": "docker compose up -d db",
     "db:migrate": "docker compose exec -T db psql -U bidbattle -d bidbattle -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/schema.sql"
   }

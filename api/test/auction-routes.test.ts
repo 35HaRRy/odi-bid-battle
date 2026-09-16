@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
-import { buildApp } from "../src/server.js";
+import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
 
 describe.sequential("DELETE /auctions/:id", () => {

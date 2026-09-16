@@ -104,15 +104,15 @@ describe("shared battlefield and background upload validation", () => {
       .toThrow(new AssetError("image required"));
   });
 
-  it("rejects bytes above 5 MiB", () => {
-    const buffer = Buffer.alloc(5 * 1024 * 1024 + 1);
+  it("rejects bytes above the single-file ceiling", () => {
+    const buffer = Buffer.alloc(3_500_000 + 1);
     png.copy(buffer);
     expect(() => validateAssetImage({ ...image, buffer }))
       .toThrow(new AssetError("image too large"));
   });
 
-  it("accepts bytes at exactly 5 MiB", () => {
-    const buffer = Buffer.alloc(5 * 1024 * 1024);
+  it("accepts bytes at exactly the single-file ceiling", () => {
+    const buffer = Buffer.alloc(3_500_000);
     png.copy(buffer);
     expect(validateAssetImage({ ...image, buffer }).buffer).toBe(buffer);
   });

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "node scripts/copy-api-assets.mjs && npm run build",
+  "outputDirectory": "dist",
+  "git": {
+    "deploymentEnabled": false
+  },
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": "api/assets/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" }
+  ]
+}

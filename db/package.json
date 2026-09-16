@@ -1,0 +1,13 @@
+{
+  "name": "db",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@neon/config": "^1.5.0"
+  }
+}

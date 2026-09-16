@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { api, type BattlefieldSummary, type Auction, type DraftBattlefield } from "./api";
+import { api, ApiError, type BattlefieldSummary, type Auction, type DraftBattlefield } from "./api";
 import { t, type Lang } from "./i18n";
 import { Modal } from "./modal";
 import { ImageField } from "./image-field";
@@ -52,7 +52,11 @@ export function BattlefieldEditor({
             await onSave({ name, geography, history }, file);
             onClose();
           } catch (err) {
-            setError((err as Error).message || t(lang, "persistFail"));
+            setError(
+              err instanceof ApiError && err.status === 413
+                ? t(lang, "tooLarge")
+                : t(lang, "persistFail"),
+            );
           } finally {
             setSaving(false);
           }

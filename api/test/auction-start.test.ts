@@ -113,7 +113,7 @@ async function seedReadyAuction(store: PgStore) {
 
 describe("POST /auctions/:id/start", () => {
   it("validates, starts, and locks preparation over HTTP", async () => {
-    const { buildApp } = await import("../src/server.js");
+    const { buildApp } = await import("../src/app.js");
     const { Server } = await import("node:http");
     const store = await PgStore.connect(DATABASE_URL);
     const app = buildApp(store);

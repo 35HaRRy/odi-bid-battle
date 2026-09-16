@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
-import { buildApp } from "../src/server.js";
+import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
 
 const VALID_PNG = Buffer.from(
@@ -69,7 +69,21 @@ describe.sequential("Battlefield & Background HTTP Routes", () => {
   });
 
   it("rejects oversized images with 413", async () => {
-    const largeBuffer = Buffer.alloc(5 * 1024 * 1024 + 100);
+    // Over the total budget: rejected on declared size before parsing.
+    const hugeBuffer = Buffer.alloc(5 * 1024 * 1024 + 100);
+    VALID_PNG.copy(hugeBuffer);
+    const hugeForm = new FormData();
+    hugeForm.set("name", "Big Field");
+    hugeForm.set("geography", "Geo");
+    hugeForm.set("history", "Hist");
+    hugeForm.set("image", new Blob([hugeBuffer], { type: "image/png" }), "big.png");
+
+    const hugeRes = await fetch(`${base}/battlefields`, { method: "POST", body: hugeForm });
+    expect(hugeRes.status).toBe(413);
+    expect((await hugeRes.json()).error).toBe("payload too large");
+
+    // Over the single-file ceiling but under the total budget: multer limit.
+    const largeBuffer = Buffer.alloc(3_500_000 + 100);
     VALID_PNG.copy(largeBuffer);
     const form = new FormData();
     form.set("name", "Big Field");

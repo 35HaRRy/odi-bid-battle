@@ -1,7 +1,13 @@
 node_modules/
 dist/
 *.local
+.vercel/
+.env
 
 __pycache__/
+
+.agents/
 .playwright-*/
+
 db/data/
+.neon

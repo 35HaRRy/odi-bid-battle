@@ -1,16 +1,20 @@
 import express from "express";
-import multer from "multer";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PgStore } from "./store.js";
 import { AssetError } from "./battlefield-domain.js";
+import { isMulterFileSizeError, uploadSingle } from "./upload.js";
+import { PayloadTooLargeError } from "./limits.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export function loadDefaultBackground(): { buffer: Buffer; mime: string } {
   const candidates = [
     join(__dirname, "assets/default-background.svg"),
+    // Vercel bundle layouts: handler at web/api, assets traced to api/...
+    join(__dirname, "../../api/assets/default-background.svg"),
+    join(__dirname, "../../api/src/assets/default-background.svg"),
     join(__dirname, "../src/assets/default-background.svg"),
     join(process.cwd(), "src/assets/default-background.svg"),
     join(process.cwd(), "dist/src/assets/default-background.svg"),
@@ -48,14 +52,13 @@ export function assetErrorHttp(err: AssetError): { status: number; body: string 
   }
 }
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
-});
-
 function handleMulterError(err: unknown, res: express.Response): boolean {
-  if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+  if (isMulterFileSizeError(err)) {
     res.status(413).json({ error: "image too large" });
+    return true;
+  }
+  if (err instanceof PayloadTooLargeError) {
+    res.status(413).json({ error: "payload too large" });
     return true;
   }
   return false;
@@ -64,7 +67,7 @@ function handleMulterError(err: unknown, res: express.Response): boolean {
 export function mountBattlefieldRoutes(app: express.Express, store: PgStore): void {
   // POST /battlefields
   app.post("/battlefields", (req, res) => {
-    upload.single("image")(req, res, async (err) => {
+    uploadSingle("image")(req, res, async (err) => {
       if (err) {
         if (handleMulterError(err, res)) return;
         return res.status(400).json({ error: "upload failed" });
@@ -147,7 +150,7 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
 
   // POST /battlefields/:id/edit
   app.post("/battlefields/:id/edit", (req, res) => {
-    upload.single("image")(req, res, async (err) => {
+    uploadSingle("image")(req, res, async (err) => {
       if (err) {
         if (handleMulterError(err, res)) return;
         return res.status(400).json({ error: "upload failed" });
@@ -214,7 +217,7 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
 
   // POST /auctions/:id/battlefield (draft-scoped geography/history/image)
   app.post("/auctions/:id/battlefield", (req, res) => {
-    upload.single("image")(req, res, async (err) => {
+    uploadSingle("image")(req, res, async (err) => {
       if (err) {
         if (handleMulterError(err, res)) return;
         return res.status(400).json({ error: "upload failed" });
@@ -265,7 +268,7 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
 
   // POST /auctions/:id/background
   app.post("/auctions/:id/background", (req, res) => {
-    upload.single("image")(req, res, async (err) => {
+    uploadSingle("image")(req, res, async (err) => {
       if (err) {
         if (handleMulterError(err, res)) return;
         return res.status(400).json({ error: "upload failed" });

@@ -3,6 +3,12 @@ import { PgStore } from "./store.js";
 import { AssetError, validateAssetImage } from "./battlefield-domain.js";
 import { assetErrorHttp } from "./battlefield-routes.js";
 import type { AuctionTeam } from "./domain.js";
+import {
+  REQUEST_BODY_BUDGET_BYTES,
+  estimateSerializedTeamsBytes,
+  jsonUtf8Bytes,
+  PayloadTooLargeError,
+} from "./limits.js";
 
 export interface FieldError {
   path: string;
@@ -148,11 +154,20 @@ function serializeTeams(teams: AuctionTeam[]) {
 export function mountTeamRoutes(app: express.Express, store: PgStore): void {
   app.get("/auctions/:id/teams", async (req, res) => {
     try {
-      res.json(serializeTeams(await store.teams.getAuctionTeams(req.params.id)));
+      const body = serializeTeams(await store.teams.getAuctionTeams(req.params.id));
+      // Previously stored oversized images are never silently dropped; the
+      // caller gets an explicit incompatibility error instead.
+      if (jsonUtf8Bytes(body) > REQUEST_BODY_BUDGET_BYTES) {
+        return res.status(413).json({ error: "response too large" });
+      }
+      res.json(body);
     } catch (e) {
       if (e instanceof AssetError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
+      }
+      if (e instanceof PayloadTooLargeError) {
+        return res.status(413).json({ error: e.message });
       }
       res.status(500).json({ error: "persistence failed" });
     }
@@ -168,11 +183,24 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
       if (errors.length > 0) {
         return res.status(400).json({ error: "invalid teams", fieldErrors: errors });
       }
-      res.json(serializeTeams(await store.teams.saveAuctionTeams(req.params.id, teams)));
+      // The saved record round-trips back with base64 images, so the full
+      // response is measured before anything is persisted. Rejected saves
+      // leave the database untouched.
+      if (estimateSerializedTeamsBytes(teams) > REQUEST_BODY_BUDGET_BYTES) {
+        return res.status(413).json({ error: "payload too large" });
+      }
+      const body = serializeTeams(await store.teams.saveAuctionTeams(req.params.id, teams));
+      if (jsonUtf8Bytes(body) > REQUEST_BODY_BUDGET_BYTES) {
+        return res.status(413).json({ error: "response too large" });
+      }
+      res.json(body);
     } catch (e) {
       if (e instanceof AssetError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
+      }
+      if (e instanceof PayloadTooLargeError) {
+        return res.status(413).json({ error: e.message });
       }
       res.status(500).json({ error: "persistence failed" });
     }

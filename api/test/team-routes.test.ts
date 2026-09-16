@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
-import { buildApp } from "../src/server.js";
+import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
 
 // Minimal valid PNG so the shared magic-byte upload policy accepts it.

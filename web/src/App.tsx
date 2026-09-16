@@ -517,8 +517,12 @@ function Catalog({
       setFile(null);
       setShowCreate(false);
       onError(null);
-    } catch {
-      onError(t(lang, "persistFail"));
+    } catch (e) {
+      onError(
+        e instanceof ApiError && e.status === 413
+          ? t(lang, "tooLarge")
+          : t(lang, "persistFail"),
+      );
     }
   }
 
@@ -559,6 +563,8 @@ function Catalog({
     } catch (e) {
       if (e instanceof ApiError && e.status === 409)
         onError(t(lang, "duplicate"));
+      else if (e instanceof ApiError && e.status === 413)
+        onError(t(lang, "tooLarge"));
       else onError(t(lang, "persistFail"));
     }
   }
