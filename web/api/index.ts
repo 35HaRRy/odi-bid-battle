@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { attachDatabasePool } from "@vercel/functions";
 import { buildApp } from "../../api/src/app.js";
 import { PgStore } from "../../api/src/store.js";
 
@@ -32,13 +33,12 @@ async function getApp(): Promise<ExpressApp> {
       // function instance alive just long enough to clean idle connections
       // up before suspension instead of leaking them.
       try {
-        const { attachDatabasePool } = await import("@vercel/functions");
-        const pool = (store as unknown as { pool?: unknown }).pool;
-        if (pool) attachDatabasePool(pool as never);
-      } catch {
-        // @vercel/functions is optional outside Vercel; the pool still works.
+        if (store.pool) attachDatabasePool(store.pool);
+        return buildApp(store);
+      } catch (error) {
+        await store.close();
+        throw error;
       }
-      return buildApp(store);
     })();
     // A failed cold start must be retryable on the next request, not cached.
     appPromise.catch(() => {

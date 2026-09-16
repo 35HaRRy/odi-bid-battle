@@ -1,7 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "buildCommand": "node scripts/copy-api-assets.mjs && npm run build",
+  "installCommand": "cd .. && corepack pnpm install --frozen-lockfile",
+  "buildCommand": "node scripts/copy-api-assets.mjs && cd .. && corepack pnpm --filter odi-bid-battle-web run build",
   "outputDirectory": "dist",
   "git": {
     "deploymentEnabled": false

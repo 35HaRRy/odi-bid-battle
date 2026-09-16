@@ -4,7 +4,7 @@
 
 Uygulamayı `odibd.hayrihabip.com` üzerinde tek Vercel projesiyle yayınlamak; geliştirme ve testleri yerel kod ve yerel veritabanıyla sürdürmek.
 
-Bu belge, mevcut repoya göre hazırlanmış **uygulama ve kurulum tarifidir**. Aşağıda yeni olarak belirtilen giriş noktaları, yapılandırmalar ve boyut kontrolleri henüz uygulanmış veya Vercel üzerinde doğrulanmış sayılmaz. Yayın öncesinde kabul listesinin tamamlanması gerekir.
+Bu belge, mevcut repoya göre hazırlanmış **uygulama ve kurulum tarifidir**. Vercel deployment adımları 2026-09-16 tarihinde uygulandı ve production yayını doğrulandı (bkz. bölüm 10 sonundaki gerçekleşen durum notu). Boyut bütçeleri (bölüm 4) kodda mevcuttur; canlıda sınır üstü yükleme denenmedi.
 
 Kararlaştırılan kapsam:
 
@@ -19,7 +19,7 @@ Kararlaştırılan kapsam:
 
 | Konu | Mevcut durum |
 | --- | --- |
-| Paket düzeni | Kökte npm workspaces: `api`, `web` |
+| Paket düzeni | Kökte pnpm workspaces: `api`, `web`, `db` (tek kök lockfile + `web` altında Vercel uyumluluğu için ayna lockfile/workspace) |
 | Frontend | `web/`: React 18, Vite 5, TypeScript |
 | Backend | `api/`: Express 4, TypeScript, `pg`, `multer` |
 | Express kurulumu | `api/src/server.ts` içindeki `buildApp(store)` |
@@ -34,7 +34,7 @@ Kararlaştırılan kapsam:
 | Backend build | `npm run build -w api`; TypeScript derleme ve asset kopyalama |
 | Git | İnceleme sırasında uzak reponun varsayılan ve mevcut branch'i `development` |
 
-Kökte mevcut bir `build` script'i yoktur. Mevcut `db:migrate` komutu yalnızca Docker içindeki yerel veritabanına yöneliktir; Neon migration komutu değildir.
+Kökte `build` script'i yoktur; build/test/typecheck kökten `pnpm --filter` ile çalıştırılır. Mevcut `db:migrate` komutu yalnızca Docker içindeki yerel veritabanına yöneliktir; Neon migration komutu değildir. Paket yöneticisi pnpm 11.20.0'dır (`packageManager` alanında sabit).
 
 ## 3. Hedef dağıtım düzeni
 
@@ -149,16 +149,16 @@ Görsel sıkıştırma veya yeni object storage servisi başlangıç şartı de�
 
 ## 6. Yerel geliştirme ve test
 
-Komutlar repo kökünde, PowerShell'de çalıştırılır. Node.js/npm, Docker ve mevcut lockfile kullanılır. Node ana sürümü yerel ve Vercel için aynı seçilip sabitlenir; mevcut bağımlılıklarla typecheck/test/build geçmesi gerekir.
+Komutlar repo kökünde, PowerShell'de çalıştırılır. Node.js 24, pnpm 11.20.0, Docker ve mevcut lockfile kullanılır. Node ana sürümü (`24.x`) yerel, Vercel ve `engines` alanında aynı sabitlenmiştir; mevcut bağımlılıklarla typecheck/test/build geçmesi gerekir.
 
 İlk kurulum:
 
 ```powershell
-npm ci
+pnpm install --frozen-lockfile
 if (!(Test-Path -LiteralPath "db/data")) {
   New-Item -ItemType Directory -Path "db/data"
 }
-npm run db:up
+pnpm run db:up
 ```
 
 Mevcut Compose dosyası `db/data` dizinini bind-backed volume olarak kullanır. PostgreSQL hazır olduktan sonra:
@@ -175,14 +175,14 @@ Terminal 1 — API:
 ```powershell
 $env:DATABASE_URL = "postgres://bidbattle:bidbattle@localhost:5433/bidbattle"
 $env:PORT = "3001"
-npm run dev -w api
+pnpm --filter odi-bid-battle-api run dev
 ```
 
 Terminal 2 — frontend:
 
 ```powershell
 $env:VITE_API_URL = "http://localhost:3001"
-npm run dev -w web
+pnpm --filter odi-bid-battle-web run dev
 ```
 
 Doğrulama:
@@ -194,12 +194,14 @@ Doğrulama:
 Yerel değişikliklerden sonra:
 
 ```powershell
-npm run typecheck
-npm test
-npm run build -w api
-npm run verify-built-assets -w api
-npm run build -w web
+pnpm run typecheck
+pnpm test
+pnpm --filter odi-bid-battle-api run build
+pnpm --filter odi-bid-battle-api run verify-built-assets
+pnpm --filter odi-bid-battle-web run build
 ```
+
+Not: `web/pnpm-lock.yaml` ve `web/pnpm-workspace.yaml`, Root Directory `web` iken Vercel'in function bağımlılık kurulumu için gerekli aynalardır. `web/package.json` değiştiğinde kökte `pnpm install --lockfile-only`, `web` dizininde de `pnpm install --lockfile-only` çalıştırılarak iki lockfile da senkron tutulur.
 
 Veritabanı kullanan testlerin bağlantısı yerel hedefte tutulur; canlı credentials bulunan bir shell'de test çalıştırılmaz. Vercel adaptörü için yeni typecheck ve entegrasyon kontrolleri de bu akışa eklenir.
 
@@ -234,17 +236,18 @@ Komutun çıkış kodu sıfır olmalı. `db/schema.sql` kendi transaction sını
 
 | Ayar | Hedef |
 | --- | --- |
-| Proje sayısı | Tek |
+| Proje sayısı | Tek (`odi-bid-battle`, 2026-09-16'da mevcut; yeniden oluşturma gerekmez) |
 | Root Directory | `web` |
-| Root dışı kaynakları dahil et | Açık; kardeş `api` workspace'i için gerekli |
+| Root dışı kaynakları dahil et | Açık (`sourceFilesOutsideRootDirectory: true`); kardeş `api` workspace'i için gerekli |
 | Framework Preset | Vite |
-| Install | Repo lockfile'ından tüm workspace bağımlılıkları; frontend-only filtre yok |
-| Build Command | `npm run build` (web kökünde); API derlemesi gerekiyorsa önce eklenir |
+| Install | `cd .. && corepack pnpm install --frozen-lockfile` (kök workspace; frontend-only filtre yok) |
+| Build Command | `node scripts/copy-api-assets.mjs && cd .. && corepack pnpm --filter odi-bid-battle-web run build` |
 | Output Directory | `dist` (web köküne göre) |
-| Node.js | Yerelde doğrulanmış aynı desteklenen ana sürüm |
-| Environment | `DATABASE_URL` ve `VITE_API_URL`, yalnızca Production |
-| Function region | Neon'a yakın |
-| Domain | `odibd.hayrihabip.com` |
+| Node.js | `24.x` (yerel v24.18.0 ile aynı; `engines` alanında sabit) |
+| Environment | `DATABASE_URL` ve `VITE_API_URL=/api`, yalnızca Production |
+| Function region | `iad1`; Neon `aws-us-east-2` (aynı kıta, yakın bölge) |
+| Domain | `odibd.hayrihabip.com` (projeye bağlı ve doğrulanmış) |
+| Etkilenmemiş projeleri atla | Kapalı (`enableAffectedProjectsDeployments: false`) |
 
 ### Preview ve yayın tetikleme politikası
 
@@ -308,6 +311,16 @@ Vercel'in verdiği otomatik deployment adresi ayrı bir backend veya Preview ort
 - [ ] Başka branch'e push otomatik Preview/Production yayını oluşturmuyor.
 
 Canlıda günlük test verisi üretilmez. Yazma, görsel yükleme, hazırlık, başlatma, teklif, satış, geri alma ve sonuç akışları öncelikle yerelde denenir. Canlı yazma doğrulaması gerekiyorsa sahibinin onayladığı ilk gerçek kayıtla yapılır; boş başlangıç şartı korunmak isteniyorsa sentetik kayıt eklenmez. Canlı yazma/yükleme denenmediyse yayın raporunda açıkça belirtilir.
+
+### Gerçekleşen durum (2026-09-16)
+
+- `web/vercel.json` yeniden oluşturuldu; `web/api/index.ts` adaptörü pool yaşam döngüsü (`attachDatabasePool` + hata durumunda pool kapatma) ve `DATABASE_URL` zorunluluğu testleriyle (`web/test/vercel-handler.test.ts`, 5 test) güçlendirildi.
+- Yerel: typecheck + 221 test (api 185, web 36) geçti; `vercel build --prod` çıktısında tek function (`api/index.func`, `nodejs24.x`), backend bağımlılıkları, `default-background.svg` ve test sızıntısı olmadığı doğrulandı.
+- Production deployment (`npx vercel --prod`) başarılı; `odibd.hayrihabip.com` aynı deployment'a aliaslı. Canlı kontroller: `/` 200 HTML, `/api/health` ok, `/api/candidates` Neon'a bağlı (2 kayıt döndü), `/api/auctions` boş liste, bilinmeyen API yolu JSON 404, bundle'da `localhost:3001` yok (`VITE_API_URL=/api`).
+- **Canlı veri kararı:** Neon `production` branch'indeki 2 test kaydı ("100 Mızraklı Gondor Muhafızı", "200 Elf Okcusu") sahip kararıyla bırakıldı; silinmedi.
+- **Bağlantı türü:** Vercel'deki `DATABASE_URL` secret'ının Neon pooled bağlantısı olduğu sahip tarafından teyit edildi.
+- **Bilinen kozmetik sorun:** Bulut build logunda function paketleme adımında `@types/express` soyuna dair TS uyarıları görülüyor; deployment ve runtime etkilenmiyor (canlıda doğrulandı). Yerel typecheck temiz; soy `pnpm-workspace.yaml` override'larıyla tekilleştirilmiş durumda.
+- Canlı yazma/yükleme akışı denenmedi; ilk gerçek kayıt sahip onayıyla oluşturulacak.
 
 ## 10. Uygulama sırası ve tamamlanma ölçütü
 
