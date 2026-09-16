@@ -1830,11 +1830,6 @@ export default function App() {
             />
           )}
         </main>
-        {tab === "draft" || tab === "live" ? null : (
-          <footer className="footer">
-            <p>{t(lang, "footerNote")}</p>
-          </footer>
-        )}
       </div>
     </div>
   );
