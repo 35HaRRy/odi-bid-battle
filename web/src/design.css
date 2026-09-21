@@ -614,6 +614,57 @@ img {
     height: 16px
 }
 
+.edit-texts-expand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    max-width: 36px;
+    min-height: 34px;
+    padding: 6px 9px;
+    overflow: hidden;
+    white-space: nowrap;
+    background: transparent;
+    color: var(--green);
+    border: 1px solid var(--green);
+    font-weight: 600;
+    font-size: 12px;
+    transition: max-width 260ms ease, background-color 260ms ease, color 260ms ease, padding 260ms ease, gap 260ms ease;
+}
+
+.edit-texts-expand svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+}
+
+.edit-texts-expand .edit-texts-label {
+    max-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-width 260ms ease, opacity 180ms ease, margin 260ms ease;
+}
+
+.edit-texts-expand:hover,
+.edit-texts-expand:focus-visible {
+    max-width: 220px;
+    gap: 8px;
+    background: var(--green);
+    color: var(--page);
+}
+
+.edit-texts-expand:hover .edit-texts-label,
+.edit-texts-expand:focus-visible .edit-texts-label {
+    max-width: 160px;
+    opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .edit-texts-expand,
+    .edit-texts-expand .edit-texts-label {
+        transition: none;
+    }
+}
+
 .selected-head {
     display: flex;
     gap: 12px;

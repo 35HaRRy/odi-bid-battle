@@ -7,6 +7,7 @@ import {
   type SavedTeam,
 } from "./api";
 import { t, type Lang } from "./i18n";
+import { buildEndAuctionClipboardText } from "./end-auction-text";
 import { ImagePreview } from "./image-preview";
 import { Modal } from "./modal";
 
@@ -203,7 +204,36 @@ export function LiveCouncil({
   }
 
   async function confirmEnd() {
-    await run(() => api.endAuction(auction.id), () => setEndOpen(false));
+    await run(async () => {
+      const next = await api.endAuction(auction.id);
+      const meta0 = (teams ?? []).find((tm) => tm.position === 0) ?? null;
+      const meta1 = (teams ?? []).find((tm) => tm.position === 1) ?? null;
+      const text = buildEndAuctionClipboardText(
+        lang,
+        {
+          name: meta0?.name ?? live?.teams[0]?.name ?? "",
+          slogan: meta0?.slogan ?? null,
+          members:
+            meta0?.members.map((m) => m.name) ??
+            live?.teams[0]?.members.map((m) => m.name) ??
+            [],
+        },
+        {
+          name: meta1?.name ?? live?.teams[1]?.name ?? "",
+          slogan: meta1?.slogan ?? null,
+          members:
+            meta1?.members.map((m) => m.name) ??
+            live?.teams[1]?.members.map((m) => m.name) ??
+            [],
+        },
+      );
+      try {
+        await navigator.clipboard?.writeText(text);
+      } catch {
+        // Clipboard kopyası Best-effort: sonlandırma akışını engellemez.
+      }
+      return next;
+    }, () => setEndOpen(false));
   }
 
   async function undoLastAction() {

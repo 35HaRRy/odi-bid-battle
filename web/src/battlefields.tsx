@@ -555,12 +555,17 @@ export function BattlefieldPreparation({
                 {!editingTexts && (
                   <button
                     type="button"
-                    className="secondary"
+                    className="edit-texts-expand"
                     disabled={pending || !isDraft}
                     onClick={() => setEditingTexts(true)}
                     style={{ position: "absolute", top: 0, right: 0 }}
+                    title={t(lang, "editTexts")}
+                    aria-label={t(lang, "editTexts")}
                   >
-                    {t(lang, "editTexts")}
+                    <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M13.5 3.5 16.5 6.5 7 16l-3.5 1 1-3.5Z" />
+                    </svg>
+                    <span className="edit-texts-label">{t(lang, "editTexts")}</span>
                   </button>
                 )}
               </div>
