@@ -77,9 +77,15 @@ function CrossedSwordsIcon() {
 export function LiveCouncil({
   lang,
   auction,
+  mode,
+  onOpenResult,
+  onBackToLive,
 }: {
   lang: Lang;
   auction: Auction;
+  mode?: "live" | "result";
+  onOpenResult?: () => void;
+  onBackToLive?: () => void;
 }) {
   const [live, setLive] = useState<LiveState | null>(null);
   const [teams, setTeams] = useState<SavedTeam[] | null>(null);
@@ -138,7 +144,10 @@ export function LiveCouncil({
     setActionError(null);
     setBattleInfoOpen(true);
     setShowResult(false);
-    refresh().catch(() => {
+    refresh().then((next) => {
+      if (!cancelled && mode === undefined && next.status === "completed")
+        setShowResult(true);
+    }).catch(() => {
       if (!cancelled) setLoadError(t(lang, "persistFail"));
     });
     api
@@ -270,7 +279,24 @@ export function LiveCouncil({
 
   const half = live.cursor >= auction.entries.length / 2;
 
-  if (showResult && ended) {
+  const showFinal =
+    mode === "result" ? ended : mode === "live" ? false : showResult && ended;
+
+  if (mode === "result" && !ended) {
+    return (
+      <section className="locked" aria-label={t(lang, "resultTitle")}>
+        <h2>{t(lang, "resultTitle")}</h2>
+        <p>{t(lang, "resultPending")}</p>
+        {onBackToLive && (
+          <button type="button" className="secondary" onClick={onBackToLive}>
+            {t(lang, "resume")}
+          </button>
+        )}
+      </section>
+    );
+  }
+
+  if (showFinal) {
     return (
       <FinalPresentation
         lang={lang}
@@ -278,7 +304,7 @@ export function LiveCouncil({
         auctionName={auction.name}
         live={live}
         teams={teams}
-        onBack={() => setShowResult(false)}
+        onBack={onBackToLive ?? (() => setShowResult(false))}
         infoOpen={battleInfoOpen}
         onToggleInfo={() => setBattleInfoOpen((open) => !open)}
       />
@@ -381,7 +407,7 @@ export function LiveCouncil({
                       type="button"
                       className="primary"
                       disabled={!teams || pending}
-                      onClick={() => setShowResult(true)}
+                      onClick={() => (onOpenResult ?? (() => setShowResult(true)))()}
                     >
                       {t(lang, "battleBegin")}
                     </button>
@@ -523,7 +549,7 @@ export function LiveCouncil({
               <div className="sale-team">
                 {saleMeta && (
                   <img
-                    src={`data:${saleMeta.flag.mime};base64,${saleMeta.flag.data}`}
+                    src={api.teamImageUrl(saleMeta.flag)}
                     alt={saleTeam.name}
                   />
                 )}
@@ -713,7 +739,7 @@ function FinalPresentation({
               <header>
                 {meta && (
                   <img
-                    src={`data:${meta.flag.mime};base64,${meta.flag.data}`}
+                    src={api.teamImageUrl(meta.flag)}
                     alt={team.name}
                   />
                 )}
@@ -784,12 +810,19 @@ function LiveTeamPane({
       : live.active || full || noGold
         ? turnText
         : "awaitCandidate";
+  const ACQUIRED_MIN = 40;
+  const ACQUIRED_MAX = 340;
+  const ACQUIRED_DEFAULT = 90;
+  const [acquiredHeight, setAcquiredHeight] = useState(ACQUIRED_DEFAULT);
+  const dragStart = useRef<{ y: number; h: number } | null>(null);
+  const clampAcquired = (v: number) =>
+    Math.min(ACQUIRED_MAX, Math.max(ACQUIRED_MIN, Math.round(v)));
   return (
     <section className="live-team" aria-label={team.name}>
       <header className="live-team-head">
         {meta && (
           <img
-            src={`data:${meta.flag.mime};base64,${meta.flag.data}`}
+            src={api.teamImageUrl(meta.flag)}
             alt={team.name}
           />
         )}
@@ -820,7 +853,7 @@ function LiveTeamPane({
               <div className="name">
                 {avatar && (
                   <img
-                    src={`data:${avatar.mime};base64,${avatar.data}`}
+                    src={api.teamImageUrl(avatar)}
                     alt=""
                   />
                 )}
@@ -862,13 +895,60 @@ function LiveTeamPane({
         </button>
       </div>
       <section className="live-acquired">
+        <div
+          className="live-acquired-resizer"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t(lang, "resizeAcquired")}
+          aria-valuenow={acquiredHeight}
+          aria-valuemin={ACQUIRED_MIN}
+          aria-valuemax={ACQUIRED_MAX}
+          title={t(lang, "resizeAcquired")}
+          tabIndex={0}
+          onPointerDown={(e) => {
+            dragStart.current = { y: e.clientY, h: acquiredHeight };
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const s = dragStart.current;
+            if (!s) return;
+            setAcquiredHeight(clampAcquired(s.h + (s.y - e.clientY)));
+          }}
+          onPointerUp={() => {
+            dragStart.current = null;
+          }}
+          onPointerCancel={() => {
+            dragStart.current = null;
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setAcquiredHeight((h) => clampAcquired(h + 16));
+            } else if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setAcquiredHeight((h) => clampAcquired(h - 16));
+            } else if (e.key === "Home") {
+              e.preventDefault();
+              setAcquiredHeight(ACQUIRED_MIN);
+            } else if (e.key === "End") {
+              e.preventDefault();
+              setAcquiredHeight(ACQUIRED_MAX);
+            }
+          }}
+          onDoubleClick={() => setAcquiredHeight(ACQUIRED_DEFAULT)}
+        />
         <div className="live-acquired-heading">
           <span>{t(lang, "acquired")}</span>
           <span>
             {team.acquiredCount} / {live.capacity}
           </span>
         </div>
-        <div className="live-acquired-list" tabIndex={0} aria-label={`${team.name}: ${t(lang, "acquired")}`}>
+        <div
+          className="live-acquired-list"
+          tabIndex={0}
+          aria-label={`${team.name}: ${t(lang, "acquired")}`}
+          style={{ height: acquiredHeight, maxHeight: acquiredHeight }}
+        >
           {(team.acquired ?? []).length === 0 ? (
             <p className="description">{t(lang, "noneAcquired")}</p>
           ) : (

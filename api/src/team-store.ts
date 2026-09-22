@@ -1,7 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { AssetError } from "./battlefield-domain.js";
+import { AssetError, validateAssetImage } from "./battlefield-domain.js";
 import type { AuctionTeam } from "./domain.js";
+
+export interface TeamImageUpload {
+  id: string;
+  auctionId: string;
+  buffer: Buffer;
+  mime: string;
+  name: string;
+  createdAt: string;
+}
+
+interface TeamImageUploadRow {
+  id: string;
+  auction_id: string;
+  image: Buffer;
+  image_mime: string;
+  image_name: string;
+  created_at: Date;
+}
 
 interface TeamRow {
   id: string;
@@ -78,6 +96,88 @@ export class TeamStore {
     const row = result.rows[0];
     if (!row) throw new AssetError("auction not found");
     if (row.status !== "draft") throw new AssetError("preparation locked");
+  }
+
+  async saveTeamImageUpload(
+    auctionId: string,
+    image: { buffer: Buffer; mime: string; name: string },
+  ): Promise<TeamImageUpload> {
+    validateAssetImage(image);
+    if (!image.name.trim()) throw new AssetError("invalid image");
+    const exists = await this.pool.query("SELECT status FROM auctions WHERE id=$1", [auctionId]);
+    const row = exists.rows[0] as { status: string } | undefined;
+    if (!row) throw new AssetError("auction not found");
+    if (row.status !== "draft") throw new AssetError("preparation locked");
+    const id = randomUUID();
+    await this.pool.query(
+      "INSERT INTO auction_team_image_uploads (id, auction_id, image, image_mime, image_name) VALUES ($1,$2,$3,$4,$5)",
+      [id, auctionId, image.buffer, image.mime, image.name],
+    );
+    await this.pool
+      .query("DELETE FROM auction_team_image_uploads WHERE created_at < now() - interval '24 hours'")
+      .catch(() => undefined);
+    const saved = await this.pool.query<TeamImageUploadRow>(
+      "SELECT * FROM auction_team_image_uploads WHERE id=$1",
+      [id],
+    );
+    const savedRow = saved.rows[0];
+    return {
+      id: savedRow.id,
+      auctionId: savedRow.auction_id,
+      buffer: Buffer.from(savedRow.image),
+      mime: savedRow.image_mime,
+      name: savedRow.image_name,
+      createdAt: (savedRow.created_at as Date).toISOString(),
+    };
+  }
+
+  async getTeamImageUpload(uploadId: string): Promise<TeamImageUpload> {
+    const result = await this.pool.query<TeamImageUploadRow>(
+      "SELECT * FROM auction_team_image_uploads WHERE id=$1",
+      [uploadId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new AssetError("invalid image");
+    return {
+      id: row.id,
+      auctionId: row.auction_id,
+      buffer: Buffer.from(row.image),
+      mime: row.image_mime,
+      name: row.image_name,
+      createdAt: (row.created_at as Date).toISOString(),
+    };
+  }
+
+  async getTeamFlagImage(teamId: string): Promise<{ buffer: Buffer; mime: string; name: string }> {
+    const result = await this.pool.query<{
+      flag_image: Buffer;
+      flag_mime: string;
+      flag_name: string;
+    }>("SELECT flag_image, flag_mime, flag_name FROM auction_teams WHERE id=$1", [teamId]);
+    const row = result.rows[0];
+    if (!row) throw new AssetError("invalid image");
+    return { buffer: Buffer.from(row.flag_image), mime: row.flag_mime, name: row.flag_name };
+  }
+
+  async getMemberAvatarImage(memberId: string): Promise<{ buffer: Buffer; mime: string; name: string } | null> {
+    const result = await this.pool.query<{
+      avatar_image: Buffer | null;
+      avatar_mime: string | null;
+      avatar_name: string | null;
+    }>("SELECT avatar_image, avatar_mime, avatar_name FROM auction_team_members WHERE id=$1", [memberId]);
+    const row = result.rows[0];
+    if (!row) throw new AssetError("invalid image");
+    if (!row.avatar_image) return null;
+    return {
+      buffer: Buffer.from(row.avatar_image),
+      mime: row.avatar_mime ?? "",
+      name: row.avatar_name ?? "",
+    };
+  }
+
+  async deleteTeamImageUploads(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.pool.query("DELETE FROM auction_team_image_uploads WHERE id=ANY($1)", [ids]).catch(() => undefined);
   }
 
   async getAuctionTeams(auctionId: string): Promise<AuctionTeam[]> {

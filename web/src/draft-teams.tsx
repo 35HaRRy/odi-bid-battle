@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type Auction, type TeamImagePayload } from "./api";
+import { api, ApiError, type Auction, type SavedTeam } from "./api";
 import { t, type Lang } from "./i18n";
 import { parseGold, teamTotal, isTeamsFormValid } from "./team-format";
 
-interface ImageEdit extends TeamImagePayload {
-  url: string;
+type ImageStatus = "existing" | "uploading" | "ready" | "failed";
+
+interface ImageEdit {
+  mime: string;
+  name: string;
+  previewUrl: string;
+  status: ImageStatus;
+  uploadId?: string;
+  reuseTeamId?: string;
+  reuseMemberId?: string;
+  file?: File | null;
+  error?: string | null;
 }
 
 interface MemberEdit {
@@ -25,8 +35,29 @@ interface TeamEdit {
   members: MemberEdit[];
 }
 
-function imageEditOf(img: TeamImagePayload): ImageEdit {
-  return { ...img, url: `data:${img.mime};base64,${img.data}` };
+function existingFlagOf(auctionId: string, team: SavedTeam): ImageEdit {
+  return {
+    mime: team.flag.mime,
+    name: team.flag.name,
+    previewUrl: api.teamImageUrl(team.flag),
+    status: "existing",
+    reuseTeamId: team.id,
+  };
+}
+
+function existingAvatarOf(
+  auctionId: string,
+  teamId: string,
+  member: SavedTeam["members"][number],
+): ImageEdit | null {
+  if (!member.avatar) return null;
+  return {
+    mime: member.avatar.mime,
+    name: member.avatar.name,
+    previewUrl: api.teamImageUrl(member.avatar),
+    status: "existing",
+    reuseMemberId: member.id,
+  };
 }
 
 function blankMember(): MemberEdit {
@@ -45,17 +76,12 @@ function blankTeam(position: 0 | 1): TeamEdit {
   };
 }
 
-function fileToImageEdit(file: File): Promise<ImageEdit> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("read failed"));
-    reader.onload = () => {
-      const url = String(reader.result ?? "");
-      const data = url.includes(",") ? url.slice(url.indexOf(",") + 1) : "";
-      resolve({ data, mime: file.type || "image/png", name: file.name, url });
-    };
-    reader.readAsDataURL(file);
-  });
+function uploadErrorMessage(lang: Lang, e: unknown): string {
+  if (e instanceof ApiError && (e.status === 413 || e.message === "image too large")) {
+    return t(lang, "tooLarge");
+  }
+  if (e instanceof ApiError && e.message) return e.message;
+  return t(lang, "imageUploadFail");
 }
 
 export function DraftTeams({
@@ -75,9 +101,10 @@ export function DraftTeams({
   const [serverFields, setServerFields] = useState<Record<string, string>>({});
   const [savedNote, setSavedNote] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [imageError, setImageError] = useState<string | null>(null);
   const flagInputs = useRef<(HTMLInputElement | null)[]>([]);
   const avatarInputs = useRef<Record<string, HTMLInputElement | null>>({});
+  const flagSeq = useRef<number[]>([0, 0]);
+  const avatarSeq = useRef<Record<string, number>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -93,13 +120,13 @@ export function DraftTeams({
               name: team.name,
               slogan: team.slogan ?? "",
               position: team.position,
-              flag: imageEditOf(team.flag),
+              flag: existingFlagOf(auction.id, team),
               members: team.members.map((m) => ({
                 key: crypto.randomUUID(),
                 id: m.id,
                 name: m.name,
                 goldText: String(m.initialGold),
-                avatar: m.avatar ? imageEditOf(m.avatar) : null,
+                avatar: existingAvatarOf(auction.id, team.id, m),
               })),
             })),
           );
@@ -140,24 +167,181 @@ export function DraftTeams({
     setSavedNote(false);
   }
 
-  async function chooseFlag(teamIndex: number, file: File | undefined) {
-    if (!file) return;
-    try {
-      patchTeam(teamIndex, { flag: await fileToImageEdit(file) });
-      setImageError(null);
-    } catch {
-      setImageError(t(lang, "imageReadFail"));
+  function revokePreview(url: string | undefined) {
+    if (url && url.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // Best-effort cleanup only.
+      }
     }
   }
 
-  async function chooseAvatar(teamIndex: number, key: string, file: File | undefined) {
-    if (!file) return;
+  async function runFlagUpload(teamIndex: number, file: File, seq: number) {
     try {
-      patchMember(teamIndex, key, { avatar: await fileToImageEdit(file) });
-      setImageError(null);
-    } catch {
-      setImageError(t(lang, "imageReadFail"));
+      const uploaded = await api.uploadTeamImage(auction.id, file);
+      setTeams((prev) => {
+        if (!prev) return prev;
+        const current = prev[teamIndex]?.flag;
+        if (current?.status === "uploading" && flagSeq.current[teamIndex] !== seq) return prev;
+        const old = prev[teamIndex]?.flag?.previewUrl;
+        const next = prev.map((team, i) =>
+          i === teamIndex
+            ? {
+                ...team,
+                flag: {
+                  mime: uploaded.mime,
+                  name: uploaded.name,
+                  previewUrl: URL.createObjectURL(file),
+                  status: "ready" as const,
+                  uploadId: uploaded.uploadId,
+                  file: null,
+                  error: null,
+                },
+              }
+            : team,
+        );
+        revokePreview(old);
+        return next;
+      });
+    } catch (e) {
+      setTeams((prev) => {
+        if (!prev) return prev;
+        if (flagSeq.current[teamIndex] !== seq) return prev;
+        return prev.map((team, i) =>
+          i === teamIndex && team.flag
+            ? { ...team, flag: { ...team.flag, status: "failed" as const, error: uploadErrorMessage(lang, e), file } }
+            : team,
+        );
+      });
     }
+    setSavedNote(false);
+  }
+
+  function chooseFlag(teamIndex: number, file: File | undefined) {
+    if (!file) return;
+    const seq = (flagSeq.current[teamIndex] ?? 0) + 1;
+    flagSeq.current[teamIndex] = seq;
+    const previewUrl = URL.createObjectURL(file);
+    setTeams((prev) => {
+      if (!prev) return prev;
+      revokePreview(prev[teamIndex]?.flag?.previewUrl);
+      return prev.map((team, i) =>
+        i === teamIndex
+          ? {
+              ...team,
+              flag: {
+                mime: file.type || "image/png",
+                name: file.name,
+                previewUrl,
+                status: "uploading" as const,
+                file,
+                error: null,
+              },
+            }
+          : team,
+      );
+    });
+    void runFlagUpload(teamIndex, file, seq);
+  }
+
+  function retryFlag(teamIndex: number) {
+    const file = teams?.[teamIndex]?.flag?.file;
+    if (file) chooseFlag(teamIndex, file);
+  }
+
+  async function runAvatarUpload(teamIndex: number, key: string, file: File, seq: number) {
+    try {
+      const uploaded = await api.uploadTeamImage(auction.id, file);
+      setTeams((prev) => {
+        if (!prev) return prev;
+        if ((avatarSeq.current[key] ?? 0) !== seq) return prev;
+        const old = prev[teamIndex]?.members.find((m) => m.key === key)?.avatar?.previewUrl;
+        const next = prev.map((team, i) =>
+          i === teamIndex
+            ? {
+                ...team,
+                members: team.members.map((m) =>
+                  m.key === key
+                    ? {
+                        ...m,
+                        avatar: {
+                          mime: uploaded.mime,
+                          name: uploaded.name,
+                          previewUrl: URL.createObjectURL(file),
+                          status: "ready" as const,
+                          uploadId: uploaded.uploadId,
+                          file: null,
+                          error: null,
+                        },
+                      }
+                    : m,
+                ),
+              }
+            : team,
+        );
+        revokePreview(old);
+        return next;
+      });
+    } catch (e) {
+      setTeams((prev) => {
+        if (!prev) return prev;
+        if ((avatarSeq.current[key] ?? 0) !== seq) return prev;
+        return prev.map((team, i) =>
+          i === teamIndex
+            ? {
+                ...team,
+                members: team.members.map((m) =>
+                  m.key === key && m.avatar
+                    ? { ...m, avatar: { ...m.avatar, status: "failed" as const, error: uploadErrorMessage(lang, e), file } }
+                    : m,
+                ),
+              }
+            : team,
+        );
+      });
+    }
+    setSavedNote(false);
+  }
+
+  function chooseAvatar(teamIndex: number, key: string, file: File | undefined) {
+    if (!file) return;
+    const seq = (avatarSeq.current[key] ?? 0) + 1;
+    avatarSeq.current[key] = seq;
+    const previewUrl = URL.createObjectURL(file);
+    setTeams((prev) => {
+      if (!prev) return prev;
+      const old = prev[teamIndex]?.members.find((m) => m.key === key)?.avatar?.previewUrl;
+      revokePreview(old);
+      return prev.map((team, i) =>
+        i === teamIndex
+          ? {
+              ...team,
+              members: team.members.map((m) =>
+                m.key === key
+                  ? {
+                      ...m,
+                      avatar: {
+                        mime: file.type || "image/png",
+                        name: file.name,
+                        previewUrl,
+                        status: "uploading" as const,
+                        file,
+                        error: null,
+                      },
+                    }
+                  : m,
+              ),
+            }
+          : team,
+      );
+    });
+    void runAvatarUpload(teamIndex, key, file, seq);
+  }
+
+  function retryAvatar(teamIndex: number, key: string) {
+    const member = teams?.[teamIndex]?.members.find((m) => m.key === key);
+    if (member?.avatar?.file) chooseAvatar(teamIndex, key, member.avatar.file);
   }
 
   function transferMember(fromIndex: number, key: string) {
@@ -175,8 +359,17 @@ export function DraftTeams({
     setSavedNote(false);
   }
 
+  const imagesSettled = (list: TeamEdit[] | null): boolean => {
+    if (!list) return false;
+    return list.every(
+      (team) =>
+        (team.flag?.status === "existing" || team.flag?.status === "ready") &&
+        team.members.every((m) => !m.avatar || m.avatar.status === "existing" || m.avatar.status === "ready"),
+    );
+  };
+
   async function save() {
-    if (!teams || saving || !isTeamsFormValid(teams)) return;
+    if (!teams || saving || !isTeamsFormValid(teams) || !imagesSettled(teams)) return;
     setSaving(true);
     setSaveError(null);
     setServerFields({});
@@ -187,13 +380,21 @@ export function DraftTeams({
           name: team.name,
           slogan: team.slogan,
           position: team.position,
-          flag: team.flag ? { data: team.flag.data, mime: team.flag.mime, name: team.flag.name } : null,
+          flag: team.flag?.uploadId
+            ? { uploadId: team.flag.uploadId }
+            : team.flag?.reuseTeamId
+              ? { teamId: team.flag.reuseTeamId }
+              : null,
           members: team.members.map((m) => {
             const gold = parseGold(m.goldText);
             return {
               name: m.name,
               initialGold: gold ?? 0,
-              avatar: m.avatar ? { data: m.avatar.data, mime: m.avatar.mime, name: m.avatar.name } : null,
+              avatar: m.avatar?.uploadId
+                ? { uploadId: m.avatar.uploadId }
+                : m.avatar?.reuseMemberId
+                  ? { memberId: m.avatar.reuseMemberId }
+                  : null,
             };
           }),
         })),
@@ -205,13 +406,13 @@ export function DraftTeams({
           name: team.name,
           slogan: team.slogan ?? "",
           position: team.position,
-          flag: imageEditOf(team.flag),
+          flag: existingFlagOf(auction.id, team),
           members: team.members.map((m) => ({
             key: crypto.randomUUID(),
             id: m.id,
             name: m.name,
             goldText: String(m.initialGold),
-            avatar: m.avatar ? imageEditOf(m.avatar) : null,
+            avatar: existingAvatarOf(auction.id, team.id, m),
           })),
         })),
       );
@@ -234,7 +435,8 @@ export function DraftTeams({
   const totals = teams ? teams.map(teamTotal) : [];
   const equal = totals.length === 2 && totals[0] === totals[1];
   const formValid = teams ? isTeamsFormValid(teams) : false;
-  const saveDisabled = saving || !formValid;
+  const settled = imagesSettled(teams);
+  const saveDisabled = saving || !formValid || !settled;
 
   useEffect(() => {
     if (saveRef) {
@@ -259,6 +461,7 @@ export function DraftTeams({
         <div>
           <h2>{t(lang, "teamsTitle")}</h2>
           <p className="description">{t(lang, "teamsIntro")}</p>
+          <p className="description">{t(lang, "singleFileLimitNote")}</p>
         </div>
       </div>
       <div id="balance-banner">
@@ -291,7 +494,7 @@ export function DraftTeams({
                 title={team.flag ? t(lang, "changeImage") : t(lang, "uploadFlag")}
                 onClick={() => flagInputs.current[ti]?.click()}
               >
-                {team.flag ? <img src={team.flag.url} alt="" /> : "🏳"}
+                {team.flag ? <img src={team.flag.previewUrl} alt="" /> : "🏳"}
               </button>
               <input
                 type="file"
@@ -327,6 +530,17 @@ export function DraftTeams({
                 />
                 {!team.slogan.trim() && <span className="field-error">{t(lang, "sloganRequired")}</span>}
                 {!team.flag && <span className="field-error">{t(lang, "flagRequired")}</span>}
+                {team.flag?.status === "uploading" && (
+                  <span className="description" role="status">{t(lang, "imageUploading")}</span>
+                )}
+                {team.flag?.status === "failed" && (
+                  <span className="field-error" role="alert">
+                    {team.flag.error ?? t(lang, "imageUploadFail")}{" "}
+                    <button type="button" className="quiet" onClick={() => retryFlag(ti)}>
+                      {t(lang, "retry")}
+                    </button>
+                  </span>
+                )}
               </div>
             </div>
             <div className="member-columns">
@@ -348,7 +562,7 @@ export function DraftTeams({
                       title={m.avatar ? t(lang, "changeImage") : t(lang, "uploadAvatar")}
                       onClick={() => avatarInputs.current[m.key]?.click()}
                     >
-                      {m.avatar ? <img src={m.avatar.url} alt="" /> : (m.name.charAt(0) || "•")}
+                      {m.avatar ? <img src={m.avatar.previewUrl} alt="" /> : (m.name.charAt(0) || "•")}
                     </button>
                     <input
                       type="file"
@@ -371,6 +585,17 @@ export function DraftTeams({
                         onChange={(e) => patchMember(ti, m.key, { name: e.target.value })}
                       />
                       {!m.name.trim() && <span className="field-error name-error">{t(lang, "requiredName")}</span>}
+                      {m.avatar?.status === "uploading" && (
+                        <span className="description" role="status">{t(lang, "imageUploading")}</span>
+                      )}
+                      {m.avatar?.status === "failed" && (
+                        <span className="field-error" role="alert">
+                          {m.avatar.error ?? t(lang, "imageUploadFail")}{" "}
+                          <button type="button" className="quiet" onClick={() => retryAvatar(ti, m.key)}>
+                            {t(lang, "retry")}
+                          </button>
+                        </span>
+                      )}
                     </div>
                     <div>
                       <input
@@ -428,11 +653,6 @@ export function DraftTeams({
           </section>
         ))}
       </div>
-      {imageError && (
-        <p className="field-error" role="alert">
-          {imageError}
-        </p>
-      )}
       {saveError && (
         <p className="field-error" role="alert">
           {saveError}

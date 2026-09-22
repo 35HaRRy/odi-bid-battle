@@ -180,6 +180,139 @@ describe.sequential("Auction team HTTP routes", () => {
     ).toBe(true);
   });
 
+  it("uploads images separately and saves by reference", async () => {
+    const auction = await (
+      await fetch(`${base}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Refs", sourceListId: null }),
+      })
+    ).json();
+
+    async function upload(): Promise<{ uploadId: string; mime: string; name: string; size: number; url: string }> {
+      const fd = new FormData();
+      fd.append("image", new File([FLAG_BYTES], "flag.png", { type: "image/png" }));
+      const res = await fetch(`${base}/auctions/${auction.id}/team-images`, { method: "POST", body: fd });
+      expect(res.status).toBe(201);
+      return res.json();
+    }
+
+    const up1 = await upload();
+    const up2 = await upload();
+    expect(up1.uploadId).toBeTruthy();
+    expect(up1.size).toBe(FLAG_BYTES.length);
+
+    const staged = await fetch(`${base}${up1.url}`);
+    expect(staged.status).toBe(200);
+    expect(staged.headers.get("content-type")).toContain("image/png");
+
+    const save = await fetch(`${base}/auctions/${auction.id}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teams: [
+          { name: "Kuzey", slogan: "Birlik", position: 0, flag: { uploadId: up1.uploadId }, members: [{ name: "Elif", initialGold: 10, avatar: null }] },
+          { name: "Guney", slogan: "Guc", position: 1, flag: { uploadId: up2.uploadId }, members: [{ name: "Deniz", initialGold: 10, avatar: null }] },
+        ],
+      }),
+    });
+    expect(save.status).toBe(200);
+    const saved = await save.json();
+    // Summaries carry no base64 bytes — only metadata plus per-file URLs.
+    expect(saved[0].flag.data).toBeUndefined();
+    expect(saved[0].flag.url).toContain(`/teams/${saved[0].id}/flag`);
+    expect(saved[0].flag.size).toBe(FLAG_BYTES.length);
+
+    const flag = await fetch(`${base}${saved[0].flag.url}`);
+    expect(flag.status).toBe(200);
+    expect(Buffer.from(await flag.arrayBuffer()).equals(FLAG_BYTES)).toBe(true);
+
+    // Unchanged images can be re-saved by reuse reference without re-upload.
+    const resave = await fetch(`${base}/auctions/${auction.id}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teams: [
+          { name: "Kuzey", slogan: "Birlik", position: 0, flag: { teamId: saved[0].id }, members: [{ name: "Elif", initialGold: 10, avatar: null }] },
+          { name: "Guney", slogan: "Guc", position: 1, flag: { teamId: saved[1].id }, members: [{ name: "Deniz", initialGold: 10, avatar: null }] },
+        ],
+      }),
+    });
+    expect(resave.status).toBe(200);
+  });
+
+  it("saves large combined images via separate uploads without 413", async () => {
+    const auction = await (
+      await fetch(`${base}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "BigRefs", sourceListId: null }),
+      })
+    ).json();
+
+    // Each file stays under the 3.5 MB single-file ceiling, but together
+    // they exceed the 4 MB JSON body budget — the old combined check 413'd
+    // this even though the save request itself only carries tiny references.
+    const big = Buffer.alloc(2_500_000);
+    Buffer.from("89504e470d0a1a0a", "hex").copy(big, 0);
+    async function uploadBig(): Promise<{ uploadId: string }> {
+      const fd = new FormData();
+      fd.append("image", new File([big], "flag.png", { type: "image/png" }));
+      const res = await fetch(`${base}/auctions/${auction.id}/team-images`, { method: "POST", body: fd });
+      expect(res.status).toBe(201);
+      return res.json();
+    }
+    const up1 = await uploadBig();
+    const up2 = await uploadBig();
+
+    const save = await fetch(`${base}/auctions/${auction.id}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teams: [
+          { name: "Kuzey", slogan: "Birlik", position: 0, flag: { uploadId: up1.uploadId }, members: [{ name: "Elif", initialGold: 10, avatar: null }] },
+          { name: "Guney", slogan: "Guc", position: 1, flag: { uploadId: up2.uploadId }, members: [{ name: "Deniz", initialGold: 10, avatar: null }] },
+        ],
+      }),
+    });
+    expect(save.status).toBe(200);
+    const saved = await save.json();
+    expect(saved[0].flag.size).toBe(big.length);
+  });
+
+  it("rejects cross-auction upload references", async () => {
+    const a = await (
+      await fetch(`${base}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "A1", sourceListId: null }),
+      })
+    ).json();
+    const b = await (
+      await fetch(`${base}/auctions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "B1", sourceListId: null }),
+      })
+    ).json();
+    const fd = new FormData();
+    fd.append("image", new File([FLAG_BYTES], "flag.png", { type: "image/png" }));
+    const up = await (
+      await fetch(`${base}/auctions/${a.id}/team-images`, { method: "POST", body: fd })
+    ).json();
+    const res = await fetch(`${base}/auctions/${b.id}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        teams: [
+          { name: "Kuzey", slogan: "Birlik", position: 0, flag: { uploadId: up.uploadId }, members: [{ name: "Elif", initialGold: 10, avatar: null }] },
+          { name: "Guney", slogan: "Guc", position: 1, flag: FLAG, members: [{ name: "Deniz", initialGold: 10, avatar: null }] },
+        ],
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("requires exactly two teams and known auctions", async () => {
     const one = await fetch(`${base}/auctions/missing/teams`);
     expect(one.status).toBe(404);

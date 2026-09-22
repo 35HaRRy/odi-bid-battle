@@ -83,21 +83,40 @@ export interface DraftBattlefield {
   hasCustomImage: boolean;
   archivedAt: string | null;
 }
+export interface TeamImageRef {
+  mime: string;
+  name: string;
+  size: number;
+  url: string;
+}
+export interface TeamImageUploadRef {
+  uploadId: string;
+}
+export interface TeamFlagReuseRef {
+  teamId: string;
+}
+export interface TeamAvatarReuseRef {
+  memberId: string;
+}
+// Legacy inline payloads are still accepted by the server so older saves
+// keep working; new saves use upload/reuse references instead of base64.
 export interface TeamImagePayload {
   data: string;
   mime: string;
   name: string;
 }
+export type TeamFlagPayload = TeamImageUploadRef | TeamFlagReuseRef | TeamImagePayload | null;
+export type TeamAvatarPayload = TeamImageUploadRef | TeamAvatarReuseRef | TeamImagePayload | null;
 export interface TeamMemberPayload {
   name: string;
   initialGold: number;
-  avatar: TeamImagePayload | null;
+  avatar: TeamAvatarPayload;
 }
 export interface TeamPayload {
   name: string;
   slogan: string;
   position: 0 | 1;
-  flag: TeamImagePayload | null;
+  flag: TeamFlagPayload;
   members: TeamMemberPayload[];
 }
 export interface SavedTeamMember {
@@ -105,7 +124,7 @@ export interface SavedTeamMember {
   teamId: string;
   name: string;
   initialGold: number;
-  avatar: TeamImagePayload | null;
+  avatar: TeamImageRef | null;
 }
 export interface SavedTeam {
   id: string;
@@ -113,8 +132,15 @@ export interface SavedTeam {
   name: string;
   slogan: string | null;
   position: 0 | 1;
-  flag: TeamImagePayload;
+  flag: TeamImageRef;
   members: SavedTeamMember[];
+}
+export interface TeamImageUpload {
+  uploadId: string;
+  mime: string;
+  name: string;
+  size: number;
+  url: string;
 }
 export interface FieldError {
   path: string;
@@ -171,9 +197,19 @@ function editForm(name: string, file: File | null): FormData {
   return fd;
 }
 
+// In-place catalog edits keep the same candidate id with new image bytes,
+// so the image URL must change to bust the browser cache in mounted lists.
+const candidateImageRevs: Record<string, number> = {};
+
 export const api = {
   base: BASE,
-  imageUrl: (id: string) => `${BASE}/candidates/${id}/image`,
+  imageUrl: (id: string) => {
+    const rev = candidateImageRevs[id];
+    return rev ? `${BASE}/candidates/${id}/image?r=${rev}` : `${BASE}/candidates/${id}/image`;
+  },
+  bumpCandidateImage: (id: string) => {
+    candidateImageRevs[id] = (candidateImageRevs[id] ?? 0) + 1;
+  },
   battlefieldImageUrl: (id: string) => `${BASE}/battlefields/${id}/image`,
   draftBattlefieldImageUrl: (auctionId: string, rev = 0) =>
     `${BASE}/auctions/${auctionId}/battlefield/image${rev ? `?r=${rev}` : ""}`,
@@ -495,6 +531,20 @@ export const api = {
         method: "DELETE",
       }),
     );
+  },
+  teamFlagUrl: (auctionId: string, teamId: string) =>
+    `${BASE}/auctions/${auctionId}/teams/${teamId}/flag`,
+  teamAvatarUrl: (auctionId: string, teamId: string, memberId: string) =>
+    `${BASE}/auctions/${auctionId}/teams/${teamId}/members/${memberId}/avatar`,
+  teamImageUrl: (ref: TeamImageRef) => `${BASE}${ref.url}`,
+  async uploadTeamImage(auctionId: string, file: File): Promise<TeamImageUpload> {
+    assertFileBudget(file);
+    const fd = new FormData();
+    fd.append("image", file);
+    const r = await check(
+      await fetch(`${BASE}/auctions/${auctionId}/team-images`, { method: "POST", body: fd }),
+    );
+    return r.json();
   },
   async getAuctionTeams(auctionId: string): Promise<SavedTeam[]> {
     const r = await check(await fetch(`${BASE}/auctions/${auctionId}/teams`));

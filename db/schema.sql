@@ -83,6 +83,20 @@ CREATE TABLE IF NOT EXISTS auction_team_members (
 DROP TRIGGER IF EXISTS check_team_balance ON auction_team_members;
 DROP FUNCTION IF EXISTS validate_team_balance();
 
+-- Staged team images: each file is uploaded on its own so the combined
+-- team payload never has to carry every flag/avatar in a single request.
+-- Rows are draft-scoped, expire after 24h, and are consumed atomically by
+-- the team save (unused rows are pruned opportunistically).
+CREATE TABLE IF NOT EXISTS auction_team_image_uploads (
+  id TEXT PRIMARY KEY,
+  auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
+  image BYTEA NOT NULL CHECK (octet_length(image) > 0),
+  image_mime TEXT NOT NULL,
+  image_name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_team_image_uploads_auction ON auction_team_image_uploads(auction_id, created_at);
+
 -- Upgrade existing databases without discarding legacy selections or image data.
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_image BYTEA;
 ALTER TABLE auctions ADD COLUMN IF NOT EXISTS background_mime TEXT;

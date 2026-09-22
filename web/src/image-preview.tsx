@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { t, type Lang } from "./i18n";
 import { Modal } from "./modal";
@@ -22,6 +22,10 @@ export function ImagePreview({
 }) {
   const [failed, setFailed] = useState(false);
   const [enlarged, setEnlarged] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
 
   const frameClass = className ? `image-preview ${className}` : "image-preview";
   if (!src || failed) {

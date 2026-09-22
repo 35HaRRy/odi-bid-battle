@@ -126,6 +126,7 @@ export function buildApp(store: PgStore): express.Express {
     try {
       const rec = await store.getCandidate(req.params.id);
       res.setHeader("Content-Type", rec.imageMime || "image/png");
+      res.setHeader("Cache-Control", "no-store");
       res.send(rec.image);
     } catch (err) {
       const h = toHttp(err);

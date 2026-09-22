@@ -8,9 +8,14 @@ import { BattlefieldLibrary, BattlefieldPreparation } from "./battlefields";
 import { DraftTeams } from "./draft-teams";
 import { DraftReview } from "./draft-review";
 import { LiveCouncil } from "./live-council";
+import {
+  applyCatalogCreate,
+  applyCatalogEdit,
+  searchForVisibleRecord,
+} from "./catalog-scroll";
 import type { FieldError } from "./api";
 
-type Tab = "auctions" | "catalog" | "lists" | "draft" | "live" | "battlefields";
+type Tab = "auctions" | "catalog" | "lists" | "draft" | "live" | "result" | "battlefields";
 
 const TABS: readonly Tab[] = [
   "auctions",
@@ -18,6 +23,7 @@ const TABS: readonly Tab[] = [
   "lists",
   "draft",
   "live",
+  "result",
   "battlefields",
 ];
 
@@ -502,17 +508,33 @@ function Catalog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const pendingScrollId = useRef<string | null>(null);
+  const cardRefs = useRef(new Map<string, HTMLElement>());
   const q = search.toLocaleLowerCase(lang);
   const shown = items.filter((c) =>
     c.name.toLocaleLowerCase(lang).includes(q),
   );
   const editing = editingId ? items.find((c) => c.id === editingId) ?? null : null;
 
+  useEffect(() => {
+    if (!pendingScrollId.current) return;
+    const id = pendingScrollId.current;
+    pendingScrollId.current = null;
+    requestAnimationFrame(() => {
+      cardRefs.current
+        .get(id)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [items]);
+
   async function create() {
     if (!name.trim() || !file) return;
     try {
       const c = await api.createCandidate(name, file);
-      onItems([...items, c]);
+      const r = applyCatalogCreate(items, c);
+      pendingScrollId.current = r.scrollId;
+      setSearch((s) => searchForVisibleRecord(s, c.name, lang));
+      onItems(r.items);
       setName("");
       setFile(null);
       setShowCreate(false);
@@ -553,11 +575,13 @@ function Catalog({
     if (!editing) return;
     try {
       const updated = await api.editCatalogCandidate(editing.id, name, file);
-      if (updated.id === editing.id) {
-        onItems(items.map((c) => (c.id === updated.id ? updated : c)));
-      } else {
-        onItems([...items.filter((c) => c.id !== editing.id), updated]);
+      if (file) api.bumpCandidateImage(updated.id);
+      const r = applyCatalogEdit(items, editing.id, updated);
+      if (r.scrollId) {
+        pendingScrollId.current = r.scrollId;
+        setSearch((s) => searchForVisibleRecord(s, updated.name, lang));
       }
+      onItems(r.items);
       setEditingId(null);
       onError(null);
     } catch (e) {
@@ -643,7 +667,15 @@ function Catalog({
       <div className="full-catalog-scroll" tabIndex={0} aria-label={t(lang, "catalog")}>
         <div className="full-catalog">
           {shown.map((c) => (
-            <article className="candidate" key={c.id}>
+            <article
+              className="candidate"
+              key={c.id}
+              data-candidate-id={c.id}
+              ref={(el) => {
+                if (el) cardRefs.current.set(c.id, el);
+                else cardRefs.current.delete(c.id);
+              }}
+            >
               <ImagePreview
                 lang={lang}
                 src={api.imageUrl(c.id)}
@@ -848,6 +880,7 @@ function Lists({
     if (!editingId) return;
     try {
       const updated = await api.editCatalogCandidate(editingId, name, file);
+      if (file) api.bumpCandidateImage(updated.id);
       if (updated.id === editingId) {
         onCandidates(candidates.map((c) => (c.id === updated.id ? updated : c)));
       } else {
@@ -1098,15 +1131,17 @@ function AuctionWorkspace({
   view,
   onOpenDraft,
   onOpenLive,
+  onOpenResult,
   onBackToAuctions,
   onCandidates,
 }: {
   lang: Lang;
   candidates: Candidate[];
   onError: (m: string | null) => void;
-  view: "auctions" | "draft" | "live";
+  view: "auctions" | "draft" | "live" | "result";
   onOpenDraft: () => void;
   onOpenLive: () => void;
+  onOpenResult: () => void;
   onBackToAuctions: () => void;
   onCandidates: (c: Candidate[]) => void;
 }) {
@@ -1142,7 +1177,11 @@ function AuctionWorkspace({
         ? (rawActive && rawActive.status !== "draft"
             ? rawActive
             : (auctions.find((a) => a.status !== "draft") ?? null))
-        : rawActive;
+        : view === "result"
+          ? (rawActive && rawActive.status !== "draft"
+              ? rawActive
+              : (auctions.find((a) => a.status === "completed") ?? null))
+          : rawActive;
   const draftEntryIds = active ? active.entries : [];
   const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, () => {});
   const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
@@ -1221,7 +1260,8 @@ function AuctionWorkspace({
     setActiveId(id);
     localStorage.setItem("obb-selected-auction", id);
     const target = auctions.find((a) => a.id === id);
-    if (target && target.status !== "draft") onOpenLive();
+    if (target?.status === "completed") onOpenResult();
+    else if (target && target.status !== "draft") onOpenLive();
     else onOpenDraft();
   }
 
@@ -1502,7 +1542,41 @@ function AuctionWorkspace({
             </button>
           </>
         ) : (
-          <LiveCouncil lang={lang} auction={active} />
+          <LiveCouncil
+            lang={lang}
+            auction={active}
+            mode="live"
+            onOpenResult={onOpenResult}
+          />
+        )}
+      </section>
+    );
+  }
+
+  if (view === "result") {
+    return (
+      <section className="route-home">
+        {!active ? (
+          <>
+            <p className="empty">{t(lang, "noResult")}</p>
+            <button className="secondary" onClick={onBackToAuctions}>
+              {t(lang, "auctions")}
+            </button>
+          </>
+        ) : active.status === "draft" ? (
+          <>
+            <p className="empty">{t(lang, "resultPending")}</p>
+            <button className="secondary" onClick={onOpenDraft}>
+              {t(lang, "openDraft")}
+            </button>
+          </>
+        ) : (
+          <LiveCouncil
+            lang={lang}
+            auction={active}
+            mode="result"
+            onBackToLive={onOpenLive}
+          />
         )}
       </section>
     );
@@ -1632,7 +1706,7 @@ function AuctionWorkspace({
                 <td>{a.name || t(lang, "draft")}</td>
                 <td>
                   <span
-                    className={`state-tag ${a.status === "ongoing" ? "running" : ""}`}
+                    className={`state-tag ${a.status === "ongoing" ? "running" : a.status === "completed" ? "ended" : ""}`}
                   >
                     {t(lang, stateKey(a.status))}
                   </span>
@@ -1644,7 +1718,7 @@ function AuctionWorkspace({
                       className="secondary small-btn"
                       onClick={() => open(a.id)}
                     >
-                      {t(lang, a.status === "draft" ? "openDraft" : "resume")}
+                      {t(lang, a.status === "draft" ? "openDraft" : a.status === "completed" ? "resultTitle" : "resume")}
                     </button>
                     <button className="secondary small-btn" onClick={() => openClone(a.id)}>
                       {t(lang, "cloneAuction")}
@@ -1726,7 +1800,7 @@ export default function App() {
   return (
     <div>
       <div className="topstrip">
-        <span>ODI Bid Battle</span>
+        <span>2 Ordular savaşı</span>
         <span>{t(lang, "tagline")}</span>
       </div>
       <div className="shell">
@@ -1734,7 +1808,7 @@ export default function App() {
           <div className="brand">
             <TreeMark />
             <div>
-              <strong>ODI Bid Battle</strong>
+              <strong>2 Ordular savaşı</strong>
               <small>{t(lang, "tagline")}</small>
             </div>
           </div>
@@ -1798,6 +1872,12 @@ export default function App() {
           >
             {t(lang, "ongoingAuction")}
           </button>
+          <button
+            onClick={() => navigateToTab("result")}
+            aria-current={tab === "result" ? "page" : undefined}
+          >
+            {t(lang, "resultTitle")}
+          </button>
         </nav>
         <Status msg={error} />
         <main className="content">
@@ -1822,9 +1902,18 @@ export default function App() {
               lang={lang}
               candidates={candidates}
               onError={setError}
-              view={tab === "draft" ? "draft" : tab === "live" ? "live" : "auctions"}
+              view={
+                tab === "draft"
+                  ? "draft"
+                  : tab === "live"
+                    ? "live"
+                    : tab === "result"
+                      ? "result"
+                      : "auctions"
+              }
               onOpenDraft={() => navigateToTab("draft")}
               onOpenLive={() => navigateToTab("live")}
+              onOpenResult={() => navigateToTab("result")}
               onBackToAuctions={() => navigateToTab("auctions")}
               onCandidates={setCandidates}
             />

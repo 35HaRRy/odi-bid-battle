@@ -63,6 +63,13 @@ describe("live council entry", () => {
       "secondHalf",
       "undoDone",
       "nothingToUndo",
+      "resultTitle",
+      "resultEmpty",
+      "resultNote",
+      "backLive",
+      "noResult",
+      "resultPending",
+      "unpresented",
     ]) {
       expect(t("tr", k)).not.toBe(k);
       expect(t("en", k)).not.toBe(k);

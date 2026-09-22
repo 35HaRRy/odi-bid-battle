@@ -84,6 +84,20 @@ describe("team preparation helpers", () => {
   it("exposes auction team client methods", () => {
     expect(typeof api.getAuctionTeams).toBe("function");
     expect(typeof api.saveAuctionTeams).toBe("function");
+    expect(typeof api.uploadTeamImage).toBe("function");
+    expect(typeof api.teamFlagUrl).toBe("function");
+    expect(typeof api.teamAvatarUrl).toBe("function");
+    expect(typeof api.teamImageUrl).toBe("function");
+  });
+
+  it("has separate-upload i18n keys in both languages", () => {
+    for (const key of ["imageUploadFail", "retry", "singleFileLimitNote"]) {
+      expect(t("tr", key)).not.toBe(key);
+      expect(t("en", key)).not.toBe(key);
+    }
+    expect(api.teamImageUrl({ mime: "image/png", name: "flag.png", size: 3, url: "/auctions/a/teams/t/flag" })).toContain(
+      "/auctions/a/teams/t/flag",
+    );
   });
 
   it("gates save on fully valid teams including slogan and equal budgets", () => {

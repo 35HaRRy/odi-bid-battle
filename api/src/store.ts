@@ -153,6 +153,11 @@ export class PgStore {
       this.teamRepository = {
         getAuctionTeams: (auctionId) => run(() => teams.getAuctionTeams(auctionId)),
         saveAuctionTeams: (auctionId, teamList) => run(() => teams.saveAuctionTeams(auctionId, teamList)),
+        saveTeamImageUpload: (auctionId, image) => run(() => teams.saveTeamImageUpload(auctionId, image)),
+        getTeamImageUpload: (uploadId) => run(() => teams.getTeamImageUpload(uploadId)),
+        getTeamFlagImage: (teamId) => run(() => teams.getTeamFlagImage(teamId)),
+        getMemberAvatarImage: (memberId) => run(() => teams.getMemberAvatarImage(memberId)),
+        deleteTeamImageUploads: (ids) => run(() => teams.deleteTeamImageUploads(ids)),
       };
     }
     return this.teamRepository;
