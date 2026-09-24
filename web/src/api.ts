@@ -65,6 +65,7 @@ export interface Auction {
   followsSource: boolean;
   entries: string[];
   battlefieldId: string | null;
+  simulationPromptTemplate: string;
   status: string;
 }
 export interface BattlefieldSummary {
@@ -336,12 +337,13 @@ export const api = {
   async createAuction(
     name: string,
     sourceListId: string | null,
+    simulationPromptTemplate = "",
   ): Promise<Auction> {
     const r = await check(
       await fetch(`${BASE}/auctions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, sourceListId }),
+        body: JSON.stringify({ name, sourceListId, simulationPromptTemplate }),
       }),
     );
     return r.json();
@@ -366,6 +368,26 @@ export const api = {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
+      }),
+    );
+    return r.json();
+  },
+  async saveSimulationPromptTemplate(id: string, template: string): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ simulationPromptTemplate: template }),
+      }),
+    );
+    return r.json();
+  },
+  async saveGeneralInfo(id: string, name: string, template: string): Promise<Auction> {
+    const r = await check(
+      await fetch(`${BASE}/auctions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, simulationPromptTemplate: template }),
       }),
     );
     return r.json();

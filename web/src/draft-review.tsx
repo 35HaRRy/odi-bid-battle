@@ -15,15 +15,15 @@ function stepForFieldError(path: string): number {
     path.startsWith("battlefield.") ||
     path === "background"
   )
-    return 0;
+    return 1;
   if (
     path === "auction.name" ||
     path === "entries" ||
     path.startsWith("entries") ||
     path.startsWith("candidates")
   )
-    return 1;
-  return 2;
+    return 2;
+  return 3;
 }
 
 interface Check {
@@ -91,16 +91,16 @@ export function DraftReview({
   );
 
   const checks: Check[] = [
-    { key: "checkName", ok: !!auction.name.trim(), step: 1 },
-    { key: "checkBattle", ok: !!battlefield, step: 0 },
-    { key: "checkList", ok: listOk, step: 1 },
-    { key: "checkCandidateNames", ok: namesReady, step: 1 },
+    { key: "checkName", ok: !!auction.name.trim(), step: 0 },
+    { key: "checkBattle", ok: !!battlefield, step: 1 },
+    { key: "checkList", ok: listOk, step: 2 },
+    { key: "checkCandidateNames", ok: namesReady, step: 2 },
     {
       key: "checkTeams",
       ok: !!teamPair && teamPair.every((team) => team.name.trim() && (team.slogan ?? "").trim() && team.flag),
-      step: 2,
+      step: 3,
     },
-    { key: "checkMembers", ok: !!teamPair && teamPair.every((team) => team.members.length > 0), step: 2 },
+    { key: "checkMembers", ok: !!teamPair && teamPair.every((team) => team.members.length > 0), step: 3 },
     {
       key: "checkGold",
       ok:
@@ -108,9 +108,9 @@ export function DraftReview({
         teamPair.every((team) =>
           team.members.every((m) => m.name.trim() && Number.isInteger(m.initialGold) && m.initialGold > 0),
         ),
-      step: 2,
+      step: 3,
     },
-    { key: "checkEqual", ok: !!teamPair && totals[0] === totals[1], step: 2 },
+    { key: "checkEqual", ok: !!teamPair && totals[0] === totals[1], step: 3 },
   ];
   const failures = checks.filter((c) => !c.ok);
   const ready = failures.length === 0;
@@ -145,8 +145,23 @@ export function DraftReview({
         <div>
           <section className="review-section">
             <header>
-              <h3>{t(lang, "stepBattle")}</h3>
+              <h3>{t(lang, "simulationPromptTemplate")}</h3>
               <button type="button" className="quiet" onClick={() => onGoStep(0)}>
+                {t(lang, "edit")}
+              </button>
+            </header>
+            {auction.simulationPromptTemplate.trim() ? (
+              <p className="description" style={{ whiteSpace: "pre-wrap" }}>
+                {auction.simulationPromptTemplate}
+              </p>
+            ) : (
+              <p className="description">{t(lang, "simulationPromptHint")}</p>
+            )}
+          </section>
+          <section className="review-section">
+            <header>
+              <h3>{t(lang, "stepBattle")}</h3>
+              <button type="button" className="quiet" onClick={() => onGoStep(1)}>
                 {t(lang, "edit")}
               </button>
             </header>
@@ -165,7 +180,7 @@ export function DraftReview({
           <section className="review-section">
             <header>
               <h3>{t(lang, "stepList")}</h3>
-              <button type="button" className="quiet" onClick={() => onGoStep(1)}>
+              <button type="button" className="quiet" onClick={() => onGoStep(2)}>
                 {t(lang, "edit")}
               </button>
             </header>
@@ -188,7 +203,7 @@ export function DraftReview({
           <section className="review-section">
             <header>
               <h3>{t(lang, "stepTeams")}</h3>
-              <button type="button" className="quiet" onClick={() => onGoStep(2)}>
+              <button type="button" className="quiet" onClick={() => onGoStep(3)}>
                 {t(lang, "edit")}
               </button>
             </header>

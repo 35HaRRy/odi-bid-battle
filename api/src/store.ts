@@ -59,7 +59,16 @@ export interface AuctionRecord {
   followsSource: boolean;
   entries: string[];
   battlefieldId: string | null;
+  simulationPromptTemplate: string;
   status: string;
+}
+
+const MAX_SIMULATION_PROMPT_TEMPLATE = 4000;
+
+function cleanSimulationPromptTemplate(template: string): string {
+  if (template.length > MAX_SIMULATION_PROMPT_TEMPLATE)
+    throw new Error("invalid simulation prompt template");
+  return template;
 }
 
 type Queryable = {
@@ -663,13 +672,15 @@ export class PgStore {
   async saveAuction(
     name: string,
     sourceListId: string | null,
+    simulationPromptTemplate = "",
   ): Promise<AuctionRecord> {
     if (name.length > 200) throw new Error("invalid name");
+    const template = cleanSimulationPromptTemplate(simulationPromptTemplate);
     const id = randomUUID();
     try {
       await this.q.query(
-        "INSERT INTO auctions (id, name, source_list_id, follows_source) VALUES ($1,$2,$3,$4)",
-        [id, name, sourceListId, sourceListId !== null],
+        "INSERT INTO auctions (id, name, source_list_id, follows_source, simulation_prompt_template) VALUES ($1,$2,$3,$4,$5)",
+        [id, name, sourceListId, sourceListId !== null, template],
       );
       if (sourceListId) {
         const src = await this.getList(sourceListId);
@@ -696,7 +707,7 @@ export class PgStore {
         `SELECT id, name, source_list_id, follows_source, battlefield_id,
                 battlefield_geography, battlefield_history, battlefield_image,
                 battlefield_image_mime, battlefield_image_name, background_image,
-                background_mime, background_name
+                background_mime, background_name, simulation_prompt_template
          FROM auctions WHERE id=$1 FOR UPDATE`,
         [sourceId],
       );
@@ -714,6 +725,7 @@ export class PgStore {
         background_image: Buffer | null;
         background_mime: string | null;
         background_name: string | null;
+        simulation_prompt_template: string | null;
       } | undefined;
       if (!source) throw new Error("auction not found");
 
@@ -735,8 +747,8 @@ export class PgStore {
            id, name, source_list_id, follows_source, battlefield_id,
            battlefield_geography, battlefield_history, battlefield_image,
            battlefield_image_mime, battlefield_image_name, background_image,
-           background_mime, background_name, status
-         ) VALUES ($1,$2,NULL,false,$3,$4,$5,$6,$7,$8,$9,$10,$11,'draft')`,
+           background_mime, background_name, simulation_prompt_template, status
+         ) VALUES ($1,$2,NULL,false,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft')`,
         [
           cloneId,
           name,
@@ -749,6 +761,7 @@ export class PgStore {
           source.background_image,
           source.background_mime,
           source.background_name,
+          source.simulation_prompt_template ?? "",
         ],
       );
       for (let position = 0; position < entries.length; position++) {
@@ -807,6 +820,7 @@ export class PgStore {
         followsSource: false,
         entries,
         battlefieldId: source.battlefield_id,
+        simulationPromptTemplate: source.simulation_prompt_template ?? "",
         status: "draft",
       };
     } catch (err) {
@@ -835,7 +849,7 @@ export class PgStore {
   async getAuction(id: string): Promise<AuctionRecord> {
     try {
       const r = await this.q.query(
-        "SELECT id, name, source_list_id, follows_source, battlefield_id, status FROM auctions WHERE id=$1",
+        "SELECT id, name, source_list_id, follows_source, battlefield_id, simulation_prompt_template, status FROM auctions WHERE id=$1",
         [id],
       );
       const row = r.rows[0] as unknown as
@@ -845,6 +859,7 @@ export class PgStore {
             source_list_id: string | null;
             follows_source: boolean;
             battlefield_id: string | null;
+            simulation_prompt_template: string | null;
             status: string;
           }
         | undefined;
@@ -874,6 +889,7 @@ export class PgStore {
         followsSource: row.follows_source,
         entries,
         battlefieldId: row.battlefield_id,
+        simulationPromptTemplate: row.simulation_prompt_template ?? "",
         status: row.status,
       };
     } catch (err) {
@@ -953,6 +969,24 @@ export class PgStore {
       if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
       throw pgError("failed to rename auction", err);
+    }
+  }
+
+  async setSimulationPromptTemplate(id: string, template: string): Promise<AuctionRecord> {
+    const clean = cleanSimulationPromptTemplate(template);
+    try {
+      await this.requireDraft(id);
+      await this.q.query(
+        "UPDATE auctions SET simulation_prompt_template=$2, updated_at=now() WHERE id=$1",
+        [id, clean],
+      );
+      return await this.getAuction(id);
+    } catch (err) {
+      if ((err as Error).message === "auction not found") throw err;
+      if ((err as Error).message === "invalid simulation prompt template") throw err;
+      if (err instanceof AssetError) throw err;
+      if (err instanceof PersistenceError) throw err;
+      throw pgError("failed to update simulation prompt template", err);
     }
   }
 

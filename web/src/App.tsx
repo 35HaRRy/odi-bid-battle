@@ -241,7 +241,7 @@ function Steps({
   current: number;
   onSelect?: (step: number) => void;
 }) {
-  const keys = ["stepBattle", "stepList", "stepTeams", "stepReview"];
+  const keys = ["stepGeneral", "stepBattle", "stepList", "stepTeams", "stepReview"];
   return (
     <div className="steps" role="list" aria-label={t(lang, "stepList")}>
       {keys.map((k, i) => (
@@ -262,7 +262,7 @@ function Steps({
   );
 }
 
-const DRAFT_STEP_KEYS = ["stepBattle", "stepList", "stepTeams", "stepReview"] as const;
+const DRAFT_STEP_KEYS = ["stepGeneral", "stepBattle", "stepList", "stepTeams", "stepReview"] as const;
 
 function DraftStepFooter({
   lang,
@@ -284,7 +284,7 @@ function DraftStepFooter({
   onStart: () => void;
 }) {
   const prevName = step > 0 ? t(lang, DRAFT_STEP_KEYS[step - 1]) : null;
-  const nextName = step < 3 ? t(lang, DRAFT_STEP_KEYS[step + 1]) : null;
+  const nextName = step < 4 ? t(lang, DRAFT_STEP_KEYS[step + 1]) : null;
   return (
     <div className="footer draft-step-footer">
       <div className="draft-foot-side left">
@@ -304,9 +304,9 @@ function DraftStepFooter({
         )}
       </div>
       <div className="draft-foot-center">
-        {step === 1 ? (
+        {step === 1 || step === 2 ? (
           <p className="footer-note nowrap">{t(lang, "footerNote")}</p>
-        ) : step === 2 ? (
+        ) : step === 3 ? (
           <button
             type="button"
             className="primary step-nav"
@@ -318,7 +318,7 @@ function DraftStepFooter({
         ) : null}
       </div>
       <div className="draft-foot-side right">
-        {step < 3 && nextName ? (
+        {step < 4 && nextName ? (
           <button
             type="button"
             className="secondary small-btn step-nav"
@@ -327,7 +327,7 @@ function DraftStepFooter({
           >
             {nextName} →
           </button>
-        ) : step === 3 ? (
+        ) : step === 4 ? (
           <button
             type="button"
             className="primary step-nav"
@@ -1151,10 +1151,15 @@ function AuctionWorkspace({
   );
   const [search, setSearch] = useState("");
   const [newName, setNewName] = useState("");
+  const [newTemplate, setNewTemplate] = useState("");
   const [sourceId, setSourceId] = useState("");
   const [showCreateDraft, setShowCreateDraft] = useState(false);
   const [lists, setLists] = useState<CandidateList[]>([]);
   const [rename, setRename] = useState("");
+  const [templateDraft, setTemplateDraft] = useState("");
+  const [generalSaving, setGeneralSaving] = useState(false);
+  const [generalSaved, setGeneralSaved] = useState(false);
+  const [generalError, setGeneralError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [cloneSourceId, setCloneSourceId] = useState<string | null>(null);
@@ -1231,18 +1236,25 @@ function AuctionWorkspace({
   }, [active?.id, active?.name]);
 
   useEffect(() => {
+    setTemplateDraft(active?.simulationPromptTemplate ?? "");
+  }, [active?.id, active?.simulationPromptTemplate]);
+
+  useEffect(() => {
     setReviewReady(false);
     setStartErrors([]);
     setStartPending(false);
+    setGeneralSaved(false);
+    setGeneralError(null);
   }, [active?.id]);
 
   async function create() {
     try {
-      const a = await api.createAuction(newName, sourceId || null);
+      const a = await api.createAuction(newName, sourceId || null, newTemplate);
       setAuctions((p) => [a, ...p]);
       setActiveId(a.id);
       localStorage.setItem("obb-selected-auction", a.id);
       setNewName("");
+      setNewTemplate("");
       setShowCreateDraft(false);
       onError(null);
       onOpenDraft();
@@ -1254,6 +1266,7 @@ function AuctionWorkspace({
   function closeCreateDraft() {
     setShowCreateDraft(false);
     setNewName("");
+    setNewTemplate("");
   }
 
   function open(id: string) {
@@ -1323,6 +1336,28 @@ function AuctionWorkspace({
       if (e instanceof ApiError && e.status === 409)
         onError(t(lang, "duplicate"));
       else onError(t(lang, "persistFail"));
+    }
+  }
+
+  async function saveGeneral() {
+    if (!active || generalSaving) return;
+    setGeneralSaving(true);
+    setGeneralSaved(false);
+    setGeneralError(null);
+    try {
+      const updated = await api.saveGeneralInfo(active.id, rename, templateDraft);
+      setAuctions((ls) => ls.map((x) => (x.id === updated.id ? updated : x)));
+      setGeneralSaved(true);
+      onError(null);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError && e.status === 409
+          ? t(lang, "duplicate")
+          : t(lang, "persistFail");
+      setGeneralError(msg);
+      onError(msg);
+    } finally {
+      setGeneralSaving(false);
     }
   }
 
@@ -1412,6 +1447,63 @@ function AuctionWorkspace({
             </div>
             <Steps lang={lang} current={draftStep} onSelect={setDraftStep} />
             {draftStep === 0 ? (
+              <>
+                <div className="create-row">
+                  <label>
+                    {t(lang, "draftName")}
+                    <input
+                      aria-label={t(lang, "draftName")}
+                      value={rename}
+                      onChange={(e) => {
+                        setRename(e.target.value);
+                        setGeneralSaved(false);
+                        setGeneralError(null);
+                      }}
+                      placeholder={t(lang, "draftName")}
+                      maxLength={200}
+                    />
+                  </label>
+                </div>
+                <div className="create-row">
+                  <label>
+                    {t(lang, "simulationPromptTemplate")}
+                    <textarea
+                      aria-label={t(lang, "simulationPromptTemplate")}
+                      value={templateDraft}
+                      onChange={(e) => {
+                        setTemplateDraft(e.target.value);
+                        setGeneralSaved(false);
+                        setGeneralError(null);
+                      }}
+                      placeholder={t(lang, "simulationPromptHint")}
+                      rows={4}
+                      maxLength={4000}
+                    />
+                  </label>
+                </div>
+                <p className="description">{t(lang, "simulationPromptHint")}</p>
+                <div className="general-save-row">
+                  <button
+                    type="button"
+                    className="primary step-nav"
+                    disabled={generalSaving}
+                    onClick={() => void saveGeneral()}
+                  >
+                    {t(lang, "save")}
+                  </button>
+                </div>
+                {generalError && (
+                  <p className="field-error" role="alert">
+                    {generalError}
+                  </p>
+                )}
+                {generalSaved && !generalError && (
+                  <p className="save-note" role="status">
+                    {t(lang, "draftSaved")}
+                  </p>
+                )}
+              </>
+            ) : draftStep === 1 ? (
               <div>
                 <BattlefieldPreparation
                   lang={lang}
@@ -1423,25 +1515,8 @@ function AuctionWorkspace({
                   }}
                 />
               </div>
-            ) : draftStep === 1 ? (
+            ) : draftStep === 2 ? (
               <>
-                <div className="create-row">
-                  <label>
-                    {t(lang, "draftName")}
-                    <input
-                      aria-label={t(lang, "draftName")}
-                      value={rename}
-                      onChange={(e) => setRename(e.target.value)}
-                      placeholder={t(lang, "draftName")}
-                    />
-                  </label>
-                  <button
-                    className="secondary"
-                    onClick={() => mutate(api.renameAuction(active.id, rename))}
-                  >
-                    {t(lang, "rename")}
-                  </button>
-                </div>
                 <div className="split">
                   <CatalogPane
                     lang={lang}
@@ -1478,7 +1553,7 @@ function AuctionWorkspace({
                   </section>
                 </div>
               </>
-            ) : draftStep === 2 ? (
+            ) : draftStep === 3 ? (
               <DraftTeams
                 lang={lang}
                 auction={active}
@@ -1629,6 +1704,17 @@ function AuctionWorkspace({
                       </option>
                     ))}
                   </select>
+                </label>
+                <label>
+                  {t(lang, "simulationPromptTemplate")}
+                  <textarea
+                    aria-label={t(lang, "simulationPromptTemplate")}
+                    value={newTemplate}
+                    onChange={(e) => setNewTemplate(e.target.value)}
+                    placeholder={t(lang, "simulationPromptHint")}
+                    rows={4}
+                    maxLength={4000}
+                  />
                 </label>
               </div>
               <div className="dialog-actions">

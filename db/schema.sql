@@ -42,10 +42,12 @@ CREATE TABLE IF NOT EXISTS auctions (
   follows_source BOOLEAN NOT NULL DEFAULT TRUE,
   battlefield_id TEXT,
   preparation JSONB NOT NULL DEFAULT '{}',
+  simulation_prompt_template TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','ongoing','completed')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE auctions ADD COLUMN IF NOT EXISTS simulation_prompt_template TEXT NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS auction_entries (
   auction_id TEXT NOT NULL REFERENCES auctions(id) ON DELETE CASCADE,
   candidate_id TEXT NOT NULL REFERENCES candidates(id),

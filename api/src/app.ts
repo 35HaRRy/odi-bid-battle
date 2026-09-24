@@ -20,7 +20,7 @@ function toHttp(err: unknown): { status: number; body: string } {
     return { status: 400, body: "invalid preparation" };
   const msg = (err as Error).message ?? "";
   if (msg === "preparation locked") return { status: 409, body: msg };
-  if (msg === "invalid name" || msg === "invalid image")
+  if (msg === "invalid name" || msg === "invalid image" || msg === "invalid simulation prompt template")
     return { status: 400, body: msg };
   if (/duplicate/i.test(msg)) return { status: 409, body: "duplicate entry" };
   if (
@@ -270,10 +270,11 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/auctions", async (req, res) => {
     try {
-      const { name = "", sourceListId = null } = req.body ?? {};
+      const { name = "", sourceListId = null, simulationPromptTemplate = "" } = req.body ?? {};
       const rec = await store.saveAuction(
         String(name),
         sourceListId ? String(sourceListId) : null,
+        typeof simulationPromptTemplate === "string" ? simulationPromptTemplate : "",
       );
       res.status(201).json(rec);
     } catch (err) {
@@ -343,6 +344,15 @@ export function buildApp(store: PgStore): express.Express {
       let rec = await store.getAuction(req.params.id);
       if (req.body?.name !== undefined)
         rec = await store.renameAuction(req.params.id, String(req.body.name));
+      if (req.body?.simulationPromptTemplate !== undefined) {
+        if (typeof req.body.simulationPromptTemplate !== "string") {
+          return res.status(400).json({ error: "invalid simulation prompt template" });
+        }
+        rec = await store.setSimulationPromptTemplate(
+          req.params.id,
+          req.body.simulationPromptTemplate,
+        );
+      }
       if (req.body?.battlefieldId !== undefined)
         rec = await store.setAuctionBattlefield(
           req.params.id,

@@ -105,7 +105,9 @@
   margin-bottom: 22px;
 }
 .create-row label {
-  min-width: 200px;
+  flex: 1 1 100%;
+  min-width: 0;
+  width: 100%;
 }
 .image-field {
   display: grid;
@@ -305,6 +307,13 @@
   justify-content: center;
   margin: -14px 0 20px;
 }
+.simulation-prompt {
+  margin-top: 12px;
+}
+.simulation-prompt textarea {
+  width: 100%;
+  white-space: pre-wrap;
+}
 @media (max-width: 600px) {
   .battlefield-info-grid {
     grid-template-columns: 1fr;
@@ -327,6 +336,13 @@ textarea:focus-visible {
   .battle-layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* General info save: single centered button above the step nav */
+.general-save-row {
+  display: flex;
+  justify-content: center;
+  margin: 18px 0 4px;
 }
 
 /* Draft step footer: prev | centered note/save | next */

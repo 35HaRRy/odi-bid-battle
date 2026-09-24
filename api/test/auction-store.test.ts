@@ -167,6 +167,24 @@ describe("pg auction persist/rehydrate", () => {
     }
   }, 30000);
 
+  it("persists the simulation prompt template and carries it into clones", async () => {
+    const store = await PgStore.connect(DATABASE_URL);
+    try {
+      const d = await store.saveAuction("Şablonlu", null, "{{Savaş alanı}} {{1.takım metni}}");
+      expect(d.simulationPromptTemplate).toBe("{{Savaş alanı}} {{1.takım metni}}");
+      const updated = await store.setSimulationPromptTemplate(d.id, "{{2.takım metni}}");
+      expect(updated.simulationPromptTemplate).toBe("{{2.takım metni}}");
+      expect((await store.getAuction(d.id)).simulationPromptTemplate).toBe("{{2.takım metni}}");
+      const clone = await store.cloneAuction(d.id, "Şablonlu Kopya");
+      expect(clone.simulationPromptTemplate).toBe("{{2.takım metni}}");
+      await expect(store.setSimulationPromptTemplate(d.id, "x".repeat(4001))).rejects.toThrow(
+        "invalid simulation prompt template",
+      );
+    } finally {
+      await store.close();
+    }
+  }, 30000);
+
   it("deletes drafts and refuses non-drafts", async () => {
     const store = await PgStore.connect(DATABASE_URL);
     try {

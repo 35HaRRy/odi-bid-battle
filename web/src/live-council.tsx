@@ -7,7 +7,7 @@ import {
   type SavedTeam,
 } from "./api";
 import { t, type Lang } from "./i18n";
-import { buildEndAuctionClipboardText } from "./end-auction-text";
+import { buildSimulationPromptText as renderSimulationPrompt } from "./end-auction-text";
 import { ImagePreview } from "./image-preview";
 import { Modal } from "./modal";
 
@@ -66,6 +66,15 @@ function UndoIcon() {
   );
 }
 
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+    </svg>
+  );
+}
+
 function CrossedSwordsIcon() {
   return (
     <span className="crossed-swords" aria-hidden="true">
@@ -99,7 +108,9 @@ export function LiveCouncil({
   const [battleInfoOpen, setBattleInfoOpen] = useState(true);
   const [showResult, setShowResult] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
   const sceneRef = useRef<HTMLElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   // Match the approved prototype: the live council renders inside the
   // compact live shell while mounted.
@@ -116,6 +127,13 @@ export function LiveCouncil({
     document.addEventListener("fullscreenchange", onFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
+
+  useEffect(() => {
+    if (promptOpen) {
+      promptRef.current?.focus();
+      promptRef.current?.select();
+    }
+  }, [promptOpen]);
 
   async function toggleFullscreen() {
     try {
@@ -144,6 +162,7 @@ export function LiveCouncil({
     setActionError(null);
     setBattleInfoOpen(true);
     setShowResult(false);
+    setPromptOpen(false);
     refresh().then((next) => {
       if (!cancelled && mode === undefined && next.status === "completed")
         setShowResult(true);
@@ -212,30 +231,43 @@ export function LiveCouncil({
     await run(() => api.completeSale(auction.id, drafts), () => setSaleOpen(false));
   }
 
+  function buildSimulationPromptText(): string {
+    const meta0 = (teams ?? []).find((tm) => tm.position === 0) ?? null;
+    const meta1 = (teams ?? []).find((tm) => tm.position === 1) ?? null;
+    return renderSimulationPrompt(lang, {
+      template: auction.simulationPromptTemplate ?? "",
+      battlefieldName: live?.battlefield?.name ?? "",
+      first: {
+        name: meta0?.name ?? live?.teams[0]?.name ?? "",
+        slogan: meta0?.slogan ?? null,
+        members: live?.teams[0]?.acquired.map((a) => a.name) ?? [],
+      },
+      second: {
+        name: meta1?.name ?? live?.teams[1]?.name ?? "",
+        slogan: meta1?.slogan ?? null,
+        members: live?.teams[1]?.acquired.map((a) => a.name) ?? [],
+      },
+    });
+  }
+
+  async function toggleSimulationPrompt() {
+    if (promptOpen) {
+      setPromptOpen(false);
+      return;
+    }
+    const text = buildSimulationPromptText();
+    try {
+      await navigator.clipboard?.writeText(text);
+    } catch {
+      // Clipboard kopyası best-effort: akışı engellemez.
+    }
+    setPromptOpen(true);
+  }
+
   async function confirmEnd() {
     await run(async () => {
       const next = await api.endAuction(auction.id);
-      const meta0 = (teams ?? []).find((tm) => tm.position === 0) ?? null;
-      const meta1 = (teams ?? []).find((tm) => tm.position === 1) ?? null;
-      const text = buildEndAuctionClipboardText(
-        lang,
-        {
-          name: meta0?.name ?? live?.teams[0]?.name ?? "",
-          slogan: meta0?.slogan ?? null,
-          members:
-            meta0?.members.map((m) => m.name) ??
-            live?.teams[0]?.members.map((m) => m.name) ??
-            [],
-        },
-        {
-          name: meta1?.name ?? live?.teams[1]?.name ?? "",
-          slogan: meta1?.slogan ?? null,
-          members:
-            meta1?.members.map((m) => m.name) ??
-            live?.teams[1]?.members.map((m) => m.name) ??
-            [],
-        },
-      );
+      const text = buildSimulationPromptText();
       try {
         await navigator.clipboard?.writeText(text);
       } catch {
@@ -346,6 +378,20 @@ export function LiveCouncil({
           </div>
         )}
         <div className="live-tools">
+          {!live.active && (ended || live.readyToEnd) && (
+            <button
+              type="button"
+              className="icon-button"
+              disabled={pending}
+              onClick={() => void toggleSimulationPrompt()}
+              aria-label={t(lang, "copySimulationPrompt")}
+              title={t(lang, "copySimulationPrompt")}
+              aria-pressed={promptOpen}
+              aria-expanded={promptOpen}
+            >
+              <CopyIcon />
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"
@@ -374,6 +420,18 @@ export function LiveCouncil({
           battlefield={live.battlefield}
           onClose={() => setBattleInfoOpen(false)}
         />
+      )}
+      {promptOpen && !live.active && (ended || live.readyToEnd) && (
+        <div className="simulation-prompt">
+          <textarea
+            ref={promptRef}
+            readOnly
+            rows={8}
+            value={buildSimulationPromptText()}
+            onClick={(e) => e.currentTarget.select()}
+            aria-label={t(lang, "copySimulationPrompt")}
+          />
+        </div>
       )}
       <div className="live-stage">
         <LiveTeamPane
