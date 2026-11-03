@@ -65,8 +65,15 @@ describe("Vercel entrypoint", () => {
 
   it("keeps unknown API paths JSON for all supported methods", async () => {
     await start();
+    const origin = "http://localhost:5173";
+    const bootstrap = await fetch(`${base}/api/auth/session`, { headers: { Origin: origin } });
+    const { csrfToken } = await bootstrap.json();
+    const cookie = bootstrap.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
     for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
-      const response = await fetch(`${base}/api/missing?x=1`, { method });
+      if (method !== "GET") {
+        expect((await fetch(`${base}/api/missing?x=1`, { method })).status).toBe(403);
+      }
+      const response = await fetch(`${base}/api/missing?x=1`, { method, headers: { Origin: origin, Cookie: cookie, "X-CSRF-Token": csrfToken } });
       expect(response.status).toBe(404);
       expect(await response.json()).toEqual({ error: "not found" });
     }

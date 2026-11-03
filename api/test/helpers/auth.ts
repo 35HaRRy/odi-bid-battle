@@ -14,7 +14,7 @@ export async function authenticatedClient(
 ): Promise<(path: string, init?: RequestInit) => Promise<Response>> {
   const origin = new URL(base).origin;
   const cookies = new Map<string, string>();
-  let csrfToken: string;
+  let csrfToken = "";
   const request = async (path: string, init: RequestInit = {}) => {
     const url = new URL(`${base.replace(/\/$/, "")}/${path.replace(/^\//, "")}`);
     if (/^[a-z][a-z\d+.-]*:/i.test(path) || path.startsWith("//") || url.origin !== origin) {
@@ -32,6 +32,11 @@ export async function authenticatedClient(
     }
     return response;
   };
+  const bootstrap = await request("/auth/session");
+  if (!bootstrap.ok) throw new Error(`Fixture CSRF bootstrap failed (${bootstrap.status})`);
+  const anonymous: { csrfToken?: string } = await bootstrap.json();
+  if (!anonymous.csrfToken) throw new Error("Fixture CSRF bootstrap did not return a token");
+  csrfToken = anonymous.csrfToken;
   const response = await request("/auth/login", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(credentials),
   });

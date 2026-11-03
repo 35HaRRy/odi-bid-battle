@@ -12,6 +12,14 @@ import { isMulterFileSizeError, uploadSingle } from "./upload.js";
 import { assetErrorHttp, mountBattlefieldRoutes } from "./battlefield-routes.js";
 import { mountLiveRoutes } from "./live-routes.js";
 import { mountTeamRoutes } from "./team-routes.js";
+import { AuthStore } from "./auth-store.js";
+import { loadAuthConfig, validateAuthConfig, type AuthConfig } from "./auth-config.js";
+import { createAccountMailer, type AccountMailer } from "./auth-mail.js";
+import { mountAuthRoutes, mountAuthSecurity } from "./auth-routes.js";
+
+export interface AppOptions { config?: AuthConfig; mail?: AccountMailer }
+export { loadAuthConfig } from "./auth-config.js";
+export type { AuthConfig } from "./auth-config.js";
 
 function toHttp(err: unknown): { status: number; body: string } {
   if (err instanceof AssetError) return assetErrorHttp(err) as { status: number; body: string };
@@ -44,14 +52,13 @@ function toImageInput(
 // Importing this module must not open ports or database connections; it only
 // builds the Express app. Standalone startup lives in server.ts, Vercel
 // startup in web/api/index.ts.
-export function buildApp(store: PgStore): express.Express {
+export function buildApp(store: PgStore, options: AppOptions = {}): express.Express {
   const app = express();
-  // Local dev runs the frontend on :5173 against the API on :3001, so CORS
-  // stays enabled outside production. Production serves frontend and API
-  // from the same origin and needs no broad CORS allowance.
-  if (process.env.NODE_ENV !== "production") {
-    app.use(cors());
-  }
+  const config = validateAuthConfig(options.config ?? loadAuthConfig());
+  if (!store.pool) throw new Error("Authentication database required");
+  const auth = new AuthStore(store.pool);
+  app.use(cors({ origin: config.allowedOrigin, credentials: true, allowedHeaders: ["Content-Type", "X-CSRF-Token"] }));
+  mountAuthSecurity(app, auth, config);
   // Reject declared over-budget bodies before any parser streams them.
   app.use((req, res, next) => {
     const declared = Number(req.headers["content-length"]);
@@ -74,6 +81,8 @@ export function buildApp(store: PgStore): express.Express {
     }
     next();
   });
+  // Public account routes MUST stay before Task 5's mandatory domain authentication gate.
+  mountAuthRoutes(app, auth, config, options.mail ?? createAccountMailer());
   mountBattlefieldRoutes(app, store);
   mountTeamRoutes(app, store);
   mountLiveRoutes(app, store);
@@ -437,9 +446,12 @@ export function buildApp(store: PgStore): express.Express {
   // Body-parser (entity.too.large) and multer (LIMIT_FILE_SIZE) errors skip
   // route handlers, so map them to JSON 413 instead of an HTML error page.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = (err as { status?: number }).status;
     const type = (err as { type?: string }).type;
+    if (status === 400 || type === "entity.parse.failed") {
+      return res.status(400).json({ error: "invalid request" });
+    }
     if (status === 413 || type === "entity.too.large") {
       return res.status(413).json({ error: "payload too large" });
     }
@@ -449,7 +461,8 @@ export function buildApp(store: PgStore): express.Express {
     if (isMulterFileSizeError(err)) {
       return res.status(413).json({ error: "image too large" });
     }
-    return next(err);
+    // Default Express error pages/logs can echo malformed credential bodies.
+    return res.status(500).json({ error: "service unavailable" });
   });
 
   return app;

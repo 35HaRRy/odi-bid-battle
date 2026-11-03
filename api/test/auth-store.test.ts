@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as crypto from "../src/auth-crypto.js";
 import { AuthStore, AUTH_RATE_LIMITS, authRateLimitKey } from "../src/auth-store.js";
 import { hashToken, verifyPassword } from "../src/auth-crypto.js";
 import { createVerifiedUser } from "./helpers/auth.js";
@@ -63,6 +64,26 @@ describe("authentication persistence", () => {
     const next = await store.createSession(user.id);
     await store.revokeSession(next.token);
     expect(await store.resolveSession(next.token)).toBeNull();
+  });
+
+  it("does not issue a session with credentials read before a concurrent password reset", async () => {
+    const user = await createVerifiedUser(pool, "racer");
+    const reset = await store.createOneTimeToken(user.id, "reset_password");
+    const original = crypto.verifyPassword;
+    let reached!: () => void, resume!: () => void;
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    const release = new Promise<void>(resolve => { resume = resolve; });
+    const spy = vi.spyOn(crypto, "verifyPassword").mockImplementationOnce(async (password, hash) => {
+      const valid = await original(password, hash); reached(); await release; return valid;
+    });
+    try {
+      const login = store.authenticateLocalUser("racer", "fixture-password");
+      await waiting;
+      expect(await store.consumePasswordResetToken(reset.token, "replacement-password")).toBe(true);
+      resume(); expect((await login) === null).toBe(true);
+      expect((await pool.query("SELECT * FROM auth_sessions")).rowCount).toBe(0);
+      expect(await store.authenticateLocalUser("racer", "replacement-password")).not.toBeNull();
+    } finally { resume(); spy.mockRestore(); }
   });
 
   it("disabled_and_unverified_users_cannot_start_sessions", async () => {

@@ -185,7 +185,10 @@ it("authenticated fixture logs in, retains cookies, and sends Origin and CSRF", 
     requests.push({ url: request.url!, cookie: request.headers.cookie, origin: request.headers.origin,
       csrf: request.headers["x-csrf-token"] as string | undefined, body });
     response.setHeader("Content-Type", "application/json");
-    if (request.url === "/auth/login") {
+    if (request.url === "/auth/session") {
+      response.setHeader("Set-Cookie", "anonymous=digest; HttpOnly; Path=/");
+      response.end(JSON.stringify({ user: null, csrfToken: "anonymous-csrf" }));
+    } else if (request.url === "/auth/login") {
       response.setHeader("Set-Cookie", ["session=opaque; HttpOnly; Path=/", "other=value; Path=/"]);
       response.end(JSON.stringify({ csrfToken: "csrf-value" }));
     } else response.end("{}");
@@ -198,9 +201,10 @@ it("authenticated fixture logs in, retains cookies, and sends Origin and CSRF", 
   try {
     const client = await authenticatedClient(base, { login: "tester", password: "fixture-password" });
     await client("/candidates", { method: "POST", body: "{}" });
-    expect(JSON.parse(requests[0].body)).toEqual({ login: "tester", password: "fixture-password" });
-    expect(requests[0].origin).toBe(base);
-    expect(requests[1]).toMatchObject({ url: "/candidates", cookie: "session=opaque; other=value", origin: base, csrf: "csrf-value" });
+    expect(requests[0].url).toBe("/auth/session");
+    expect(JSON.parse(requests[1].body)).toEqual({ login: "tester", password: "fixture-password" });
+    expect(requests[1]).toMatchObject({ origin: base, cookie: "anonymous=digest", csrf: "anonymous-csrf" });
+    expect(requests[2]).toMatchObject({ url: "/candidates", cookie: "anonymous=digest; session=opaque; other=value", origin: base, csrf: "csrf-value" });
     await expect(client("https://example.test/steal")).rejects.toThrow();
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
