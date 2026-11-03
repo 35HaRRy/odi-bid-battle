@@ -1,5 +1,38 @@
 BEGIN;
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE CHECK (username ~ '^[a-z0-9_-]+$'),
+  email TEXT UNIQUE CHECK (email = lower(btrim(email)) AND char_length(email) > 0),
+  password_hash TEXT,
+  email_verified_at TIMESTAMPTZ,
+  disabled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((id = '00000000-0000-0000-0000-000000000001') = (username = 'legacy')),
+  CHECK (email IS NOT NULL OR (id = '00000000-0000-0000-0000-000000000001'
+    AND disabled_at IS NOT NULL AND password_hash IS NULL))
+);
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')),
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id);
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  csrf_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+
 CREATE TABLE IF NOT EXISTS candidates (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
@@ -189,5 +222,33 @@ CREATE TABLE IF NOT EXISTS auction_live_history (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_live_history_auction ON auction_live_history(auction_id, id);
+
+-- Only unowned rows are legacy; repeated deployment must not republish user data.
+INSERT INTO app_users (id, username, disabled_at)
+VALUES ('00000000-0000-0000-0000-000000000001', 'legacy', now())
+ON CONFLICT (id) DO NOTHING;
+DO $$
+DECLARE
+  root TEXT;
+BEGIN
+  FOREACH root IN ARRAY ARRAY['candidates', 'candidate_lists', 'battlefields', 'auctions'] LOOP
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS owner_user_id TEXT', root);
+    IF root <> 'auctions' THEN
+      EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT FALSE', root);
+      EXECUTE format('UPDATE %I SET owner_user_id = $1, is_public = TRUE WHERE owner_user_id IS NULL', root)
+        USING '00000000-0000-0000-0000-000000000001';
+    ELSE
+      EXECUTE format('UPDATE %I SET owner_user_id = $1 WHERE owner_user_id IS NULL', root)
+        USING '00000000-0000-0000-0000-000000000001';
+    END IF;
+    EXECUTE format('ALTER TABLE %I ALTER COLUMN owner_user_id SET NOT NULL', root);
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+      WHERE conname = root || '_owner_user_id_fkey' AND conrelid = root::regclass) THEN
+      EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (owner_user_id) REFERENCES app_users(id)',
+        root, root || '_owner_user_id_fkey');
+    END IF;
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (owner_user_id)', 'idx_' || root || '_owner', root);
+  END LOOP;
+END $$;
 
 COMMIT;
