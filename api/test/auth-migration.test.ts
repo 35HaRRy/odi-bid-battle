@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { authenticatedClient, createVerifiedUser } from "./helpers/auth.js";
+import { verifyPassword } from "../src/auth-crypto.js";
 
 const schemaSql = await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8");
 const legacyId = "00000000-0000-0000-0000-000000000001";
@@ -109,7 +110,7 @@ describe("safe identity migration", () => {
     const verified = (await pool.query("SELECT * FROM app_users WHERE id=$1", [user.id])).rows[0];
     expect(verified.email_verified_at).not.toBeNull();
     expect(verified.disabled_at).toBeNull();
-    expect(verified.password_hash).toBeNull();
+    expect(await verifyPassword("fixture-password", verified.password_hash)).toBe(true);
     await pool.query(`INSERT INTO candidates (id,name,image,image_mime,image_name,owner_user_id)
       VALUES ('private','Private','\\x07','image/png','private.png',$1)`, [user.id]);
     await pool.query("INSERT INTO candidate_lists (id,name,owner_user_id) VALUES ('private-list','Private',$1)", [user.id]);
@@ -149,6 +150,13 @@ describe("safe identity migration", () => {
       if (table === "auth_tokens") expect(columns).toContain("consumed_at");
       else expect(columns).toContain("csrf_hash");
     }
+    const rateColumns = (await pool.query(`SELECT column_name FROM information_schema.columns
+      WHERE table_schema=$1 AND table_name='auth_rate_limits'`, [schema])).rows.map((row) => row.column_name);
+    expect(rateColumns.sort()).toEqual(["attempts", "expires_at", "key_hash"]);
+    await expect(pool.query("INSERT INTO auth_rate_limits VALUES ('raw-account@example.test',1,now())"))
+      .rejects.toMatchObject({ code: "23514" });
+    await expect(pool.query("INSERT INTO app_users (id,username,email) VALUES ('dash','has-dash','dash@example.test')"))
+      .rejects.toMatchObject({ code: "23514" });
     await expect(pool.query(`INSERT INTO auth_tokens (id,user_id,purpose,token_hash,expires_at)
       VALUES ('bad',$1,'login','hash',now())`, [user.id])).rejects.toMatchObject({ code: "23514" });
   });

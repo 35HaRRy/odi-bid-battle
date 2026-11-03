@@ -1,0 +1,171 @@
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { Pool } from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { AuthStore, AUTH_RATE_LIMITS, authRateLimitKey } from "../src/auth-store.js";
+import { hashToken, verifyPassword } from "../src/auth-crypto.js";
+import { createVerifiedUser } from "./helpers/auth.js";
+
+describe("authentication persistence", () => {
+  let admin: Pool;
+  let pool: Pool;
+  let store: AuthStore;
+  const schema = `auth_store_${randomUUID().replaceAll("-", "")}`;
+  beforeAll(async () => {
+    const value = process.env.AUTH_TEST_DATABASE_URL;
+    if (!value || !/^\/[^/]*(?:test|disposable)[^/]*$/i.test(new URL(value).pathname)) throw new Error("Explicit disposable AUTH_TEST_DATABASE_URL required");
+    admin = new Pool({ connectionString: value });
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const url = new URL(value);
+    url.searchParams.set("options", `-c search_path=${schema}`);
+    pool = new Pool({ connectionString: url.toString() });
+    await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
+    store = new AuthStore(pool);
+  });
+  beforeEach(async () => { await pool.query("TRUNCATE auth_tokens, auth_sessions, auth_rate_limits; DELETE FROM app_users WHERE username <> 'legacy'"); });
+  afterAll(async () => {
+    await pool?.end();
+    if (admin) { await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); }
+  });
+
+  it("normalizes unique identities without exposing passwords and fixtures can log in", async () => {
+    const user = await store.createLocalUser({ username: "  TEST_User ", email: " Test@Example.test ", password: "fixture-password" });
+    expect(user).toMatchObject({ username: "test_user", email: "test@example.test" });
+    expect(user).not.toHaveProperty("password_hash");
+    const row = (await pool.query("SELECT * FROM app_users WHERE id=$1", [user.id])).rows[0];
+    expect(await verifyPassword("fixture-password", row.password_hash)).toBe(true);
+    await expect(store.createLocalUser({ username: "test_user", email: "other@example.test", password: "fixture-password" })).rejects.toThrow();
+    for (const username of ["legacy", "ab", "a@b", "has-dash", "x".repeat(33)]) {
+      await expect(store.createLocalUser({ username, email: "other@example.test", password: "fixture-password" })).rejects.toThrow();
+    }
+    const fixture = await createVerifiedUser(pool, "fixture");
+    expect(await store.verifyLocalUser(" FIXTURE ", "fixture-password")).toEqual(fixture);
+    expect(await store.verifyLocalUser("fixture@example.test", "fixture-password")).toEqual(fixture);
+    expect(await store.verifyLocalUser("fixture", "wrong-password")).toBeNull();
+    expect(await store.verifyLocalUser("unknown", "wrong-password")).toBeNull();
+  });
+
+  it("session_stores_only_hashes_and_expires_at_7_days", async () => {
+    const user = await createVerifiedUser(pool, "tester");
+    const start = Date.now();
+    const session = await store.createSession(user.id);
+    expect(session.expiresAt.getTime() - start).toBeGreaterThanOrEqual(7 * 86400000 - 1000);
+    expect(session.expiresAt.getTime() - start).toBeLessThan(7 * 86400000 + 1000);
+    const row = (await pool.query("SELECT * FROM auth_sessions")).rows[0];
+    expect(row.token_hash).toBe(hashToken(session.token));
+    expect(row.csrf_hash).toBe(hashToken(session.csrfToken));
+    expect(JSON.stringify(row)).not.toContain(session.token);
+    expect(await store.resolveSession(session.token)).toEqual(user);
+    expect(await store.verifySessionCsrf(session.token, session.csrfToken)).toBe(true);
+    expect(await store.verifySessionCsrf(session.token, "wrong")).toBe(false);
+    await pool.query("UPDATE auth_sessions SET expires_at=now()-interval '1 second'");
+    expect(await store.resolveSession(session.token)).toBeNull();
+    const next = await store.createSession(user.id);
+    await store.revokeSession(next.token);
+    expect(await store.resolveSession(next.token)).toBeNull();
+  });
+
+  it("disabled_and_unverified_users_cannot_start_sessions", async () => {
+    const user = await store.createLocalUser({ username: "tester", email: "test@example.test", password: "fixture-password" });
+    await expect(store.createSession(user.id)).rejects.toThrow();
+    await pool.query("UPDATE app_users SET email_verified_at=now() WHERE id=$1", [user.id]);
+    const session = await store.createSession(user.id);
+    await pool.query("UPDATE app_users SET disabled_at=now() WHERE id=$1", [user.id]);
+    await expect(store.createSession(user.id)).rejects.toThrow();
+    expect(await store.resolveSession(session.token)).toBeNull();
+    expect(await store.verifyLocalUser("tester", "fixture-password")).toBeNull();
+  });
+
+  it("parallel_rate_limit_is_shared_across_stores", async () => {
+    const second = new AuthStore(pool);
+    const results = await Promise.all(Array.from({ length: 6 }, (_, i) => (i % 2 ? second : store).consumeRateLimit("login:account@example.test", 5, 900)));
+    expect(results.filter(Boolean)).toHaveLength(5);
+    expect((await pool.query("SELECT * FROM auth_rate_limits")).rows[0].key_hash).toBe(hashToken("login:account@example.test"));
+    await pool.query("UPDATE auth_rate_limits SET expires_at=now()-interval '1 second'");
+    expect(await store.consumeRateLimit("login:account@example.test", 5, 900)).toBe(true);
+    await expect(store.consumeRateLimit("key", 0, 900)).rejects.toThrow();
+  });
+
+  it("uses canonical opaque keys and the specified account/IP policies", async () => {
+    const expected = [
+      ["loginAccount", 5, 900], ["loginIp", 20, 900], ["registration", 5, 3600],
+      ["recovery", 5, 3600], ["resend", 5, 3600], ["googleStart", 20, 900],
+    ] as const;
+    expect(authRateLimitKey("login", "account", " User@Example.test ")).toBe(authRateLimitKey("login", "account", "user@example.test"));
+    expect(authRateLimitKey("login", "account", "same")).not.toBe(authRateLimitKey("login", "ip", "same"));
+    expect(authRateLimitKey("login", "account", "same")).not.toBe(authRateLimitKey("recovery", "account", "same"));
+    for (const [name, limit, seconds] of expected) {
+      const policy = AUTH_RATE_LIMITS[name];
+      const key = authRateLimitKey(name, "account", "user@example.test");
+      expect(key).toMatch(/^[a-f0-9]{64}$/);
+      const results = await Promise.all(Array.from({ length: limit + 1 }, () => store.consumeRateLimit(key, policy.limit, policy.windowSeconds)));
+      expect(results.filter(Boolean)).toHaveLength(limit);
+      const row = (await pool.query("SELECT expires_at FROM auth_rate_limits WHERE key_hash=$1", [hashToken(key)])).rows[0];
+      expect(row.expires_at.getTime() - Date.now()).toBeCloseTo(seconds * 1000, -3);
+    }
+  });
+
+  it("one-time verification and reset are atomic, expire, and reset revokes sessions", async () => {
+    const user = await store.createLocalUser({ username: "tester", email: "test@example.test", password: "fixture-password" });
+    const verify = await store.createOneTimeToken(user.id, "verify_email");
+    expect(verify.expiresAt.getTime() - Date.now()).toBeCloseTo(86400000, -3);
+    const results = await Promise.all([store.consumeVerificationToken(verify.token), store.consumeVerificationToken(verify.token)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const session = await store.createSession(user.id);
+    const reset = await store.createOneTimeToken(user.id, "reset_password");
+    expect(reset.expiresAt.getTime() - Date.now()).toBeCloseTo(1800000, -3);
+    expect((await pool.query("SELECT token_hash FROM auth_tokens WHERE token_hash=$1", [hashToken(reset.token)])).rowCount).toBe(1);
+    expect(await store.consumeVerificationToken(reset.token)).toBe(false);
+    const resetResults = await Promise.all([store.consumePasswordResetToken(reset.token, "new-password-value"), store.consumePasswordResetToken(reset.token, "new-password-value")]);
+    expect(resetResults.filter(Boolean)).toHaveLength(1);
+    expect(await store.resolveSession(session.token)).toBeNull();
+    expect(await store.verifyLocalUser("tester", "new-password-value")).not.toBeNull();
+    const expired = await store.createOneTimeToken(user.id, "reset_password");
+    await pool.query("UPDATE auth_tokens SET expires_at=now()-interval '1 second'");
+    expect(await store.consumePasswordResetToken(expired.token, "another-password")).toBe(false);
+  });
+
+  it("rolls back reset consumption, password and revocation together on failure", async () => {
+    const user = await createVerifiedUser(pool, "tester");
+    const session = await store.createSession(user.id);
+    const reset = await store.createOneTimeToken(user.id, "reset_password");
+    await pool.query(`CREATE FUNCTION reject_session_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'forced revocation failure'; END $$;
+      CREATE TRIGGER reject_session_delete BEFORE DELETE ON auth_sessions FOR EACH ROW EXECUTE FUNCTION reject_session_delete()`);
+    try {
+      await expect(store.consumePasswordResetToken(reset.token, "new-password-value")).rejects.toThrow("forced revocation failure");
+      expect(await store.resolveSession(session.token)).toEqual(user);
+      expect(await store.verifyLocalUser("tester", "fixture-password")).toEqual(user);
+      expect((await pool.query("SELECT consumed_at FROM auth_tokens WHERE token_hash=$1", [hashToken(reset.token)])).rows[0].consumed_at).toBeNull();
+    } finally {
+      await pool.query("DROP TRIGGER reject_session_delete ON auth_sessions; DROP FUNCTION reject_session_delete()");
+    }
+    expect(await store.consumePasswordResetToken(reset.token, "new-password-value")).toBe(true);
+    expect(pool.idleCount).toBe(pool.totalCount);
+  });
+
+  it("rechecks token expiry after waiting for an account lock", async () => {
+    const user = await createVerifiedUser(pool, "tester");
+    const verify = await store.createOneTimeToken(user.id, "verify_email");
+    const blocker = await pool.connect();
+    let consumption: Promise<boolean> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM app_users WHERE id=$1 FOR UPDATE", [user.id]);
+      consumption = store.consumeVerificationToken(verify.token);
+      for (let i = 0; i < 100; i++) {
+        const blocked = await admin.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF u%'");
+        if (blocked.rowCount) break;
+        if (i === 99) throw new Error("Consumption did not wait for account lock");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await blocker.query("UPDATE auth_tokens SET expires_at=clock_timestamp() WHERE token_hash=$1", [hashToken(verify.token)]);
+      await blocker.query("COMMIT");
+      expect(await consumption).toBe(false);
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      await consumption;
+    }
+  });
+});

@@ -1,14 +1,10 @@
-import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-
-// Task 2 replaces this structural fixture type with the production AuthUser export.
-export type AuthUser = { id: string; username: string; email: string };
+import { AuthStore, type AuthUser } from "../../src/auth-store.js";
+export type { AuthUser } from "../../src/auth-store.js";
 
 export async function createVerifiedUser(pool: Pool, username: string): Promise<AuthUser> {
-  const user = { id: randomUUID(), username, email: `${username}@example.test` };
-  // shortcut: passwordless fixture until Task 2 exposes its real password hasher.
-  await pool.query(`INSERT INTO app_users (id,username,email,email_verified_at)
-    VALUES ($1,$2,$3,now())`, [user.id, user.username, user.email]);
+  const user = await new AuthStore(pool).createLocalUser({ username, email: `${username}@example.test`, password: "fixture-password" });
+  await pool.query("UPDATE app_users SET email_verified_at=now() WHERE id=$1", [user.id]);
   return user;
 }
 
