@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { Pool } from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
-import { AuthStore } from "../src/auth-store.js";
+import { AuthStore, authRateLimitKey } from "../src/auth-store.js";
+import * as crypto from "../src/auth-crypto.js";
 import { hashToken } from "../src/auth-crypto.js";
 import { createVerifiedUser } from "./helpers/auth.js";
 
@@ -21,14 +22,15 @@ describe("account HTTP security", () => {
     admin = new Pool({ connectionString: value });
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(value); url.searchParams.set("options", `-c search_path=${schema}`);
-    pool = new Pool({ connectionString: url.toString() });
+    pool = new Pool({ connectionString: url.toString(), max: 2, application_name: schema });
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     auth = new AuthStore(pool);
     const app = buildApp(new PgStore(pool), { config: { allowedOrigin: origin, appUrl: origin, production: false, trustedProxies: [] }, mail: {
+      enabled: true,
       async verify() { if (unavailable) throw new Error("private SMTP error"); },
       async sendAccountMail(input) { if (rejectDelivery) throw new Error("private recipient error"); delivered.push(input); },
     } });
-    server = app.listen(0);
+    server = app.listen(0,"127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", resolve));
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   });
@@ -51,7 +53,8 @@ describe("account HTTP security", () => {
       return response;
     };
     const bootstrap = await request("/auth/session");
-    expect(bootstrap.status).toBe(200); expect(await bootstrap.json()).toMatchObject({ user: null, csrfToken: expect.any(String) });
+    expect(bootstrap.status).toBe(200);
+    expect(await bootstrap.json()).toMatchObject({ user: null, csrfToken: expect.any(String) });
     return { request, cookies, csrf: () => csrf };
   }
   const token = (purpose: string) => new URL([...delivered].reverse().find(m => m.purpose === purpose)!.url).hash.slice(1).split("=")[1];
@@ -65,6 +68,10 @@ describe("account HTTP security", () => {
       expect((await c.request(path, {}, { Origin: "" })).status).toBe(403);
     }
   });
+  it("returns exact anonymous capability fields",async()=>{
+    const c=await client();
+    expect(await (await c.request("/auth/session")).json()).toEqual({user:null,csrfToken:expect.any(String),googleEnabled:false,mailEnabled:true});
+  });
   it("binds CSRF to each authenticated session and never falls back to anonymous CSRF", async () => {
     await createVerifiedUser(pool,"tester");
     const a=await client(), b=await client(); const anonymous=a.csrf();
@@ -75,7 +82,7 @@ describe("account HTTP security", () => {
     expect((await b.request("/auth/session")).status).toBe(200);
   });
   it("sets production Secure host-only cookies and trusts only explicitly configured proxy IPs", async () => {
-    const app = buildApp(new PgStore(pool),{config:{allowedOrigin:"https://example.test",appUrl:"https://example.test",production:true,trustedProxies:["127.0.0.1/32","::ffff:127.0.0.1/128"]},mail:{async verify(){throw new Error("offline");},async sendAccountMail(){throw new Error("offline");}}});
+    const app = buildApp(new PgStore(pool),{config:{allowedOrigin:"https://example.test",appUrl:"https://example.test",production:true,trustedProxies:["127.0.0.1/32","::ffff:127.0.0.1/128"]},mail:{enabled:false,async verify(){throw new Error("offline");},async sendAccountMail(){throw new Error("offline");}}});
     const extra=app.listen(0); await new Promise<void>(resolve=>extra.once("listening",resolve));
     try {
       const address=`http://127.0.0.1:${(extra.address() as {port:number}).port}`;
@@ -83,7 +90,9 @@ describe("account HTTP security", () => {
       const cookies=bootstrap.headers.getSetCookie();
       const anonymous=cookies.find(s=>s.startsWith("__Host-odi_anon_csrf="))!;
       expect(anonymous).toContain("Secure"); expect(anonymous).toContain("HttpOnly"); expect(anonymous).not.toContain("Domain=");
-      const {csrfToken}=await bootstrap.json();
+      const view=await bootstrap.json();
+      expect(view).toEqual({user:null,csrfToken:expect.any(String),googleEnabled:false,mailEnabled:false});
+      const {csrfToken}=view;
       for(let i=0;i<6;i++) {
         const response=await fetch(address+"/auth/forgot-password",{method:"POST",headers:{Origin:"https://example.test","Content-Type":"application/json",Cookie:anonymous.split(";")[0],"X-CSRF-Token":csrfToken,"X-Forwarded-For":`198.51.100.${i}`},body:JSON.stringify({email:`missing${i}@example.test`})});
         // Missing SMTP is checked after budgets, but each explicitly trusted client gets a distinct budget.
@@ -103,7 +112,10 @@ describe("account HTTP security", () => {
     expect((await c.request("/auth/verify-email", { token: raw })).status).toBe(204);
     expect((await c.request("/auth/verify-email", { token: raw })).status).toBe(400);
     const login = await c.request("/auth/login", { login: " TESTER@EXAMPLE.TEST ", password: credentials.password });
-    expect(login.status).toBe(200); expect(await login.json()).toMatchObject({ user: { username: "tester" }, csrfToken: expect.any(String) });
+    const user=(await pool.query("SELECT id,username,email FROM app_users WHERE username='tester'")).rows[0];
+    expect(login.status).toBe(200);
+    expect(await login.json()).toEqual({ user, csrfToken: expect.any(String), googleEnabled:false, mailEnabled:true });
+    expect(await (await c.request("/auth/session")).json()).toEqual({ user, csrfToken:expect.any(String), googleEnabled:false, mailEnabled:true });
     const cookie = login.headers.getSetCookie().find(s => s.startsWith("odi_session="))!;
     expect(cookie).toContain("HttpOnly"); expect(cookie).toContain("SameSite=Lax"); expect(cookie).toContain("Path=/"); expect(cookie).toContain("Max-Age=604800");
     const session = c.cookies.get("odi_session")!;
@@ -122,6 +134,68 @@ describe("account HTTP security", () => {
     await pool.query("TRUNCATE auth_rate_limits");
     for (let i=0;i<20;i++) expect((await c.request("/auth/login", { login: `unknown${i}`, password: "wrong-password" }, { "X-Forwarded-For": `198.51.100.${i}` })).status).toBe(401);
     expect((await c.request("/auth/login", { login: "another", password: "wrong-password" })).status).toBe(429);
+  });
+  it.each(["correct password", "parallel guesses", "IP exhaustion"])("serializes admission and failure accounting before %s can verify or issue a session", async scenario => {
+    const user=await createVerifiedUser(pool,"tester");
+    if(scenario==="IP exhaustion") await createVerifiedUser(pool,"other");
+    const first=await client(), second=await client();
+    const key=scenario==="IP exhaustion" ? authRateLimitKey("login","ip","127.0.0.1") : authRateLimitKey("login","account",`user:${user.id}`);
+    const limit=scenario==="IP exhaustion" ? 20 : 5;
+    for(let i=0;i<limit-1;i++) await auth.consumeRateLimit(key,limit,900);
+    const original=crypto.verifyPassword;
+    let reached!:()=>void, releaseFirst!:()=>void, releaseOthers!:()=>void;
+    let enteredOthers=false;
+    const waiting=new Promise<void>(resolve=>{reached=resolve;});
+    const firstGate=new Promise<void>(resolve=>{releaseFirst=resolve;});
+    const othersGate=new Promise<void>(resolve=>{releaseOthers=resolve;});
+    let calls=0;
+    const spy=vi.spyOn(crypto,"verifyPassword").mockImplementation(async(password,hash)=>{
+      if (++calls===1) { const valid=await original(password,hash); reached(); await firstGate; return valid; }
+      enteredOthers=true; await othersGate; return original(password,hash);
+    });
+    const requests:Promise<Response>[]=[];
+    try {
+      requests.push(first.request("/auth/login",{login:"tester",password:"wrong-password"}));
+      await waiting;
+      for(let i=0;i<(scenario==="parallel guesses" ? 6 : 1);i++) requests.push(second.request("/auth/login",{login:scenario==="IP exhaustion" ? "other" : i%2 ? "tester" : user.email,password:scenario==="parallel guesses" ? "wrong-password" : "fixture-password"}));
+      // Observe either the PostgreSQL admission lock (fixed) or the second verifier (old race), not a timing guess.
+      for(let i=0;i<100;i++) {
+        const blocked=await admin.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event='advisory'",[schema]);
+        if(enteredOthers || blocked.rowCount) break;
+        if(i===99) throw new Error("Second login never reached admission");
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      releaseFirst(); expect((await requests[0]).status).toBe(401);
+      releaseOthers();
+      for(const response of await Promise.all(requests.slice(1))) {
+        expect(response.status).toBe(429); expect(response.headers.get("retry-after")).toBe("900");
+      }
+      expect(calls).toBe(1);
+      expect((await pool.query("SELECT * FROM auth_sessions")).rowCount).toBe(0);
+      expect((await pool.query("SELECT attempts FROM auth_rate_limits WHERE key_hash=$1",[hashToken(key)])).rows[0].attempts).toBe(limit);
+    } finally {
+      releaseFirst(); releaseOthers(); await Promise.allSettled(requests); spy.mockRestore();
+    }
+  });
+  it("uses code-point password boundaries for registration and reset without trimming",async()=>{
+    const c=await client();
+    for(const password of ["😀".repeat(6),"😀".repeat(11),"😀".repeat(129)]) {
+      expect((await c.request("/auth/register",{...credentials,password})).status).toBe(400);
+      expect((await c.request("/auth/reset-password",{token:"a".repeat(43),password})).status).toBe(400);
+    }
+    for(const count of [12,65,128]) {
+      const password="😀".repeat(count);
+      const username=`emoji${count}`,email=`${username}@example.test`;
+      await pool.query("TRUNCATE auth_rate_limits");
+      expect((await c.request("/auth/register",{username,email,password})).status).toBe(202);
+      expect((await c.request("/auth/verify-email",{token:token("verify_email")})).status).toBe(204);
+      expect(await auth.verifyLocalUser(username,password)).not.toBeNull();
+      await c.request("/auth/forgot-password",{email});
+      const replacement=` ${"😀".repeat(count-2)} `;
+      expect((await c.request("/auth/reset-password",{token:token("reset_password"),password:replacement})).status).toBe(204);
+      expect(await auth.verifyLocalUser(username,replacement)).not.toBeNull();
+      expect(await auth.verifyLocalUser(username,replacement.trim())).toBeNull();
+    }
   });
   it("uses fixed frontend token links, rejects expiry and concurrent reuse, resets all sessions", async () => {
     const user = await createVerifiedUser(pool, "tester"); const c = await client();

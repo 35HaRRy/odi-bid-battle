@@ -54,29 +54,42 @@ export class AuthStore {
   }
 
   async authenticateLocalUser(login: string, password: string) {
-    const result = await this.pool.query(`SELECT id,password_hash FROM app_users WHERE username=$1 OR email=$1`, [login.trim().toLowerCase()]);
-    const read = result.rows[0];
-    const valid = await verifyPassword(password, read?.password_hash ?? "");
-    if (!valid || !read) return null;
+    return this.transaction(client => this.authenticateOn(client,login,password));
+  }
+
+  async loginLocalUser(login: string, password: string, ip: string) {
     return this.transaction(async client => {
-      // A reset may finish during the KDF: compare the credential version under the same lock as revocation.
-      const locked = await client.query(`SELECT id,username,email,password_hash,email_verified_at,disabled_at FROM app_users WHERE id=$1 FOR UPDATE`, [read.id]);
-      const row = locked.rows[0];
-      if (!row || row.password_hash !== read.password_hash || !row.email_verified_at || row.disabled_at) return null;
-      const session = await this.insertSession(client, row.id);
-      return { user: userView(row), ...session };
+      const normalized = login.trim().toLowerCase();
+      const user = await client.query("SELECT id FROM app_users WHERE username=$1 OR email=$1",[normalized]);
+      const identity = user.rows[0] ? `user:${user.rows[0].id}` : `unknown:${normalized}`;
+      const keys = [authRateLimitKey("login","account",identity),authRateLimitKey("login","ip",ip)];
+      const policies = [AUTH_RATE_LIMITS.loginAccount,AUTH_RATE_LIMITS.loginIp];
+      // Lock actual advisory IDs in one order, including hash collisions; never acquire another pool client here.
+      const locks = [...new Set(keys.map(key => BigInt.asIntN(64,BigInt(`0x${key.slice(0,16)}`))))].sort((a,b)=>a<b ? -1 : a>b ? 1 : 0);
+      for (const lock of locks) await client.query("SELECT pg_advisory_xact_lock($1::bigint)",[lock.toString()]);
+      await this.cleanRateLimits(client);
+      for (let i=0;i<keys.length;i++) {
+        const exhausted = await client.query("SELECT 1 FROM auth_rate_limits WHERE key_hash=$1 AND expires_at>clock_timestamp() AND attempts>=$2",[hashToken(keys[i]),policies[i].limit]);
+        if (exhausted.rowCount) return {status:429 as const};
+      }
+      const session = await this.authenticateOn(client,normalized,password);
+      if (session) return {status:200 as const,...session};
+      for (let i=0;i<keys.length;i++) await this.incrementRateLimit(client,keys[i],policies[i].limit,policies[i].windowSeconds);
+      return {status:401 as const};
     });
   }
 
-  async loginRateIdentity(login: string): Promise<string> {
-    const normalized = login.trim().toLowerCase();
-    const result = await this.pool.query("SELECT id FROM app_users WHERE username=$1 OR email=$1", [normalized]);
-    return result.rows[0] ? `user:${result.rows[0].id}` : `unknown:${normalized}`;
-  }
-
-  async rateLimitAvailable(key: string, limit: number): Promise<boolean> {
-    const result = await this.pool.query("SELECT 1 FROM auth_rate_limits WHERE key_hash=$1 AND expires_at>now() AND attempts>=$2", [hashToken(key),limit]);
-    return !result.rowCount;
+  private async authenticateOn(client: PoolClient, login: string, password: string) {
+    const result = await client.query(`SELECT id,password_hash FROM app_users WHERE username=$1 OR email=$1`, [login.trim().toLowerCase()]);
+    const read = result.rows[0];
+    const valid = await verifyPassword(password, read?.password_hash ?? "");
+    if (!valid || !read) return null;
+    // A reset may finish during the KDF: compare the credential version under the same lock as revocation.
+    const locked = await client.query(`SELECT id,username,email,password_hash,email_verified_at,disabled_at FROM app_users WHERE id=$1 FOR UPDATE`, [read.id]);
+    const row = locked.rows[0];
+    if (!row || row.password_hash !== read.password_hash || !row.email_verified_at || row.disabled_at) return null;
+    const session = await this.insertSession(client, row.id);
+    return { user: userView(row), ...session };
   }
 
   async rotateSessionCsrf(token: string): Promise<string> {
@@ -97,7 +110,7 @@ export class AuthStore {
     const token = newToken();
     const csrfToken = newToken();
     const result = await client.query(`INSERT INTO auth_sessions (id,user_id,token_hash,csrf_hash,expires_at)
-      VALUES ($2,$1,$3,$4,now()+interval '7 days') RETURNING expires_at`,
+      VALUES ($2,$1,$3,$4,clock_timestamp()+interval '7 days') RETURNING expires_at`,
     [userId, randomUUID(), hashToken(token), hashToken(csrfToken)]);
     if (!result.rowCount) throw new Error("Account unavailable");
     return { token, csrfToken, expiresAt: result.rows[0].expires_at };
@@ -122,12 +135,22 @@ export class AuthStore {
 
   async consumeRateLimit(key: string, limit: number, windowSeconds: number): Promise<boolean> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000000 || !Number.isSafeInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 86400) throw new Error("Invalid rate limit");
-    await this.pool.query("DELETE FROM auth_rate_limits WHERE expires_at<=now()");
-    const result = await this.pool.query(`INSERT INTO auth_rate_limits (key_hash,attempts,expires_at)
-      VALUES ($1,1,now()+$3*interval '1 second') ON CONFLICT (key_hash) DO UPDATE
-      SET attempts=CASE WHEN auth_rate_limits.expires_at<=now() THEN 1 ELSE auth_rate_limits.attempts+1 END,
-        expires_at=CASE WHEN auth_rate_limits.expires_at<=now() THEN EXCLUDED.expires_at ELSE auth_rate_limits.expires_at END
-      WHERE auth_rate_limits.expires_at<=now() OR auth_rate_limits.attempts<$2 RETURNING key_hash`,
+    await this.cleanRateLimits(this.pool);
+    return this.incrementRateLimit(this.pool,key,limit,windowSeconds);
+  }
+
+  private async cleanRateLimits(db: Pick<Pool,"query">): Promise<void> {
+    // Cleanup must not wait on rows held by a different admitted login.
+    await db.query("DELETE FROM auth_rate_limits WHERE key_hash IN (SELECT key_hash FROM auth_rate_limits WHERE expires_at<=clock_timestamp() FOR UPDATE SKIP LOCKED)");
+  }
+
+  private async incrementRateLimit(db: Pick<Pool,"query">, key: string, limit: number, windowSeconds: number): Promise<boolean> {
+    const result = await db.query(`WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at)
+      INSERT INTO auth_rate_limits (key_hash,attempts,expires_at)
+      VALUES ($1,1,(SELECT at FROM instant)+$3*interval '1 second') ON CONFLICT (key_hash) DO UPDATE
+      SET attempts=CASE WHEN auth_rate_limits.expires_at<=(SELECT at FROM instant) THEN 1 ELSE auth_rate_limits.attempts+1 END,
+        expires_at=CASE WHEN auth_rate_limits.expires_at<=(SELECT at FROM instant) THEN EXCLUDED.expires_at ELSE auth_rate_limits.expires_at END
+      WHERE auth_rate_limits.expires_at<=(SELECT at FROM instant) OR auth_rate_limits.attempts<$2 RETURNING key_hash`,
     [hashToken(key), limit, windowSeconds]);
     return !!result.rowCount;
   }

@@ -19,7 +19,7 @@ describe("authentication persistence", () => {
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(value);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    pool = new Pool({ connectionString: url.toString() });
+    pool = new Pool({ connectionString: url.toString(), max: 2, application_name: schema });
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     store = new AuthStore(pool);
   });
@@ -105,6 +105,46 @@ describe("authentication persistence", () => {
     await pool.query("UPDATE auth_rate_limits SET expires_at=now()-interval '1 second'");
     expect(await store.consumeRateLimit("login:account@example.test", 5, 900)).toBe(true);
     await expect(store.consumeRateLimit("key", 0, 900)).rejects.toThrow();
+  });
+  it("serializes intersecting account/IP login budgets across stores using a two-client pool and failure-only counters",async()=>{
+    const first=await createVerifiedUser(pool,"first"),second=await createVerifiedUser(pool,"second");
+    const other=new AuthStore(pool);
+    const results=await Promise.all(Array.from({length:8},(_,i)=>(i%2 ? store : other).loginLocalUser(i%2 ? first.username : second.email,"fixture-password",i%3 ? "192.0.2.1" : "192.0.2.2")));
+    expect(results.map(result=>result.status)).toEqual(Array(8).fill(200));
+    expect((await pool.query("SELECT * FROM auth_rate_limits")).rowCount).toBe(0);
+    const ipKey=authRateLimitKey("login","ip","192.0.2.1");
+    for(let i=0;i<19;i++) await store.consumeRateLimit(ipKey,20,900);
+    expect((await store.loginLocalUser("unknown","wrong-password","192.0.2.1")).status).toBe(401);
+    expect((await other.loginLocalUser(first.email,"fixture-password","192.0.2.1")).status).toBe(429);
+    expect((await store.loginLocalUser(first.username,"fixture-password","192.0.2.2")).status).toBe(200);
+    expect(pool.idleCount).toBe(pool.totalCount);
+  });
+  it("checks login budget expiry after waiting for admission and releases transaction locks on errors",async()=>{
+    const user=await createVerifiedUser(pool,"tester");
+    const key=authRateLimitKey("login","account",`user:${user.id}`);
+    for(let i=0;i<5;i++) await store.consumeRateLimit(key,5,900);
+    const blocker=await pool.connect();
+    let login:ReturnType<AuthStore["loginLocalUser"]>|undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock($1::bigint)",[BigInt.asIntN(64,BigInt(`0x${key.slice(0,16)}`)).toString()]);
+      login=store.loginLocalUser(user.email,"fixture-password","192.0.2.1");
+      for(let i=0;i<100;i++) {
+        const blocked=await admin.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event='advisory'",[schema]);
+        if(blocked.rowCount) break;
+        if(i===99) throw new Error("Login did not wait for budget admission");
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      await blocker.query("UPDATE auth_rate_limits SET expires_at=clock_timestamp() WHERE key_hash=$1",[hashToken(key)]);
+      await blocker.query("COMMIT");
+      expect((await login).status).toBe(200);
+    } finally {await blocker.query("ROLLBACK");blocker.release();await login;}
+    const spy=vi.spyOn(crypto,"verifyPassword").mockRejectedValueOnce(new Error("Credential service busy"));
+    try {await expect(store.loginLocalUser(user.username,"fixture-password","192.0.2.1")).rejects.toThrow("Credential service busy");}
+    finally {spy.mockRestore();}
+    expect((await store.loginLocalUser(user.username,"fixture-password","192.0.2.1")).status).toBe(200);
+    expect((await pool.query("SELECT * FROM auth_rate_limits WHERE key_hash=$1",[hashToken(key)])).rowCount).toBe(0);
+    expect(pool.idleCount).toBe(pool.totalCount);
   });
 
   it("uses canonical opaque keys and the specified account/IP policies", async () => {

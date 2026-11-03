@@ -27,7 +27,7 @@ async function derive(password: string, salt: Buffer): Promise<Buffer> {
   }
 }
 
-function validPassword(password: string): boolean {
+export function validPassword(password: string): boolean {
   return typeof password === "string" && password.length <= 256 && Array.from(password).length >= 12 && Array.from(password).length <= 128;
 }
 

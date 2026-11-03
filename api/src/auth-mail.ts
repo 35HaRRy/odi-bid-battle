@@ -3,6 +3,7 @@ import { isAccountEmail, type TokenPurpose } from "./auth-store.js";
 
 export interface AccountMail { to: string; purpose: TokenPurpose; url: string }
 export interface AccountMailer {
+  readonly enabled: boolean;
   verify(): Promise<void>;
   sendAccountMail(input: AccountMail): Promise<void>;
 }
@@ -34,6 +35,7 @@ export function createAccountMailer(options?: { from: string; transport: MailTra
     }
   }
   return {
+    enabled: !!transport && !!from,
     async verify() {
       try { if (!transport || !from) throw new Error(); await transport.verify(); }
       catch { throw new Error("Mail unavailable"); }
