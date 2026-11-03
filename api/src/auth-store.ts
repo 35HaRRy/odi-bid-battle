@@ -67,7 +67,7 @@ export class AuthStore {
       // Lock actual advisory IDs in one order, including hash collisions; never acquire another pool client here.
       const locks = [...new Set(keys.map(key => BigInt.asIntN(64,BigInt(`0x${key.slice(0,16)}`))))].sort((a,b)=>a<b ? -1 : a>b ? 1 : 0);
       for (const lock of locks) await client.query("SELECT pg_advisory_xact_lock($1::bigint)",[lock.toString()]);
-      await this.cleanRateLimits(client);
+      await this.cleanRateLimits(client,keys);
       for (let i=0;i<keys.length;i++) {
         const exhausted = await client.query("SELECT 1 FROM auth_rate_limits WHERE key_hash=$1 AND expires_at>clock_timestamp() AND attempts>=$2",[hashToken(keys[i]),policies[i].limit]);
         if (exhausted.rowCount) return {status:429 as const};
@@ -139,9 +139,9 @@ export class AuthStore {
     return this.incrementRateLimit(this.pool,key,limit,windowSeconds);
   }
 
-  private async cleanRateLimits(db: Pick<Pool,"query">): Promise<void> {
-    // Cleanup must not wait on rows held by a different admitted login.
-    await db.query("DELETE FROM auth_rate_limits WHERE key_hash IN (SELECT key_hash FROM auth_rate_limits WHERE expires_at<=clock_timestamp() FOR UPDATE SKIP LOCKED)");
+  private async cleanRateLimits(db: Pick<Pool,"query">, keys?: string[]): Promise<void> {
+    // Admission transactions may delete only their locked keys; global cleanup runs in autocommit.
+    await db.query("DELETE FROM auth_rate_limits WHERE key_hash IN (SELECT key_hash FROM auth_rate_limits WHERE expires_at<=clock_timestamp() AND ($1::text[] IS NULL OR key_hash=ANY($1)) FOR UPDATE SKIP LOCKED)",[keys?.map(hashToken) ?? null]);
   }
 
   private async incrementRateLimit(db: Pick<Pool,"query">, key: string, limit: number, windowSeconds: number): Promise<boolean> {

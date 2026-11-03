@@ -146,6 +146,44 @@ describe("authentication persistence", () => {
     expect((await pool.query("SELECT * FROM auth_rate_limits WHERE key_hash=$1",[hashToken(key)])).rowCount).toBe(0);
     expect(pool.idleCount).toBe(pool.totalCount);
   });
+  it("does not cross-delete expired counters owned by another admitted login",async()=>{
+    const first=await createVerifiedUser(pool,"first"),second=await createVerifiedUser(pool,"second");
+    const accounts=[first,second].map(user=>hashToken(authRateLimitKey("login","account",`user:${user.id}`)));
+    const ips=["192.0.2.1","192.0.2.2"].map(ip=>hashToken(authRateLimitKey("login","ip",ip)));
+    const unrelated=hashToken("unrelated-expired-counter");
+    await pool.query("INSERT INTO auth_rate_limits (key_hash,attempts,expires_at) SELECT unnest($1::text[]),5,clock_timestamp()-interval '1 second'",[[...accounts,unrelated]]);
+    const blocker=await admin.connect();
+    const original=crypto.verifyPassword;
+    let reachedFirst!:()=>void,reachedSecond!:()=>void,release!:()=>void,calls=0;
+    const firstWaiting=new Promise<void>(resolve=>{reachedFirst=resolve;});
+    const secondWaiting=new Promise<void>(resolve=>{reachedSecond=resolve;});
+    const gate=new Promise<void>(resolve=>{release=resolve;});
+    const spy=vi.spyOn(crypto,"verifyPassword").mockImplementation(async(password,hash)=>{
+      const valid=await original(password,hash);
+      if(++calls===1) reachedFirst(); else reachedSecond();
+      await gate; return valid;
+    });
+    const logins:ReturnType<AuthStore["loginLocalUser"]>[]=[];
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(`SELECT key_hash FROM ${schema}.auth_rate_limits WHERE key_hash=$1 FOR UPDATE`,[accounts[0]]);
+      // Old global cleanup skips A's locked row and deletes B's; B then deletes A's after release.
+      logins.push(store.loginLocalUser(first.username,"wrong-password","192.0.2.1"));
+      await firstWaiting; await blocker.query("COMMIT");
+      logins.push(new AuthStore(pool).loginLocalUser(second.email,"wrong-password","192.0.2.2"));
+      await secondWaiting; release();
+      const results=await Promise.allSettled(logins);
+      expect(results.map(result=>result.status==="fulfilled" ? result.value.status : result.reason.code)).toEqual([401,401]);
+      const rows=await pool.query("SELECT key_hash,attempts,expires_at>clock_timestamp() AS active FROM auth_rate_limits");
+      expect(rows.rows.find(row=>row.key_hash===unrelated)).toEqual({key_hash:unrelated,attempts:5,active:false});
+      for(const key of [...accounts,...ips]) expect(rows.rows.find(row=>row.key_hash===key)).toEqual({key_hash:key,attempts:1,active:true});
+      expect((await pool.query("SELECT * FROM auth_sessions")).rowCount).toBe(0);
+      expect(pool.idleCount).toBe(pool.totalCount);
+    } finally {
+      await blocker.query("ROLLBACK");blocker.release();release();
+      await Promise.allSettled(logins);spy.mockRestore();
+    }
+  });
 
   it("uses canonical opaque keys and the specified account/IP policies", async () => {
     const expected = [
