@@ -7,22 +7,28 @@ import { accountMailUrl, type AccountMailer } from "./auth-mail.js";
 
 export interface SessionView { user: AuthUser | null; csrfToken: string; googleEnabled: boolean; mailEnabled: boolean }
 
-function cookie(req: Request, name: string): string {
+export function cookie(req: Request, name: string): string {
   const matches = (req.headers.cookie ?? "").split(";").map(s => s.trim()).filter(s => s.startsWith(name + "="));
   return matches.length === 1 ? matches[0].slice(name.length + 1) : "";
 }
-function names(config: AuthConfig) {
+export function names(config: AuthConfig) {
   const prefix = config.production ? "__Host-" : "";
   return { session: prefix + "odi_session", anonymous: prefix + "odi_anon_csrf" };
 }
-function options(config: AuthConfig, maxAge: number) {
+export function options(config: AuthConfig, maxAge: number) {
   return { httpOnly: true, secure: config.production, sameSite: "lax" as const, path: "/", maxAge };
 }
-function error(res: Response, status: number, message: string) { return res.status(status).json({ error: message }); }
-function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) {
+export function error(res: Response, status: number, message: string) { return res.status(status).json({ error: message }); }
+export function asyncRoute(handler: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) {
   return (req: Request, res: Response, next: NextFunction) => {
     void handler(req, res, next).catch(() => error(res, 503, "Service unavailable; retry later"));
   };
+}
+
+export async function establishSession(res: Response, auth: AuthStore, config: AuthConfig, token: string): Promise<void> {
+  if (res.locals.sessionToken && res.locals.sessionToken !== token) await auth.revokeSession(res.locals.sessionToken);
+  res.cookie(names(config).session,token,options(config,7*86400000));
+  res.cookie(names(config).anonymous,"",options(config,0));
 }
 
 export function mountAuthSecurity(app: Express, auth: AuthStore, config: AuthConfig): void {
@@ -50,7 +56,7 @@ export function mountAuthSecurity(app: Express, auth: AuthStore, config: AuthCon
 
 export function mountAuthRoutes(app: Express, auth: AuthStore, config: AuthConfig, mail: AccountMailer): void {
   const cookies = names(config);
-  const capabilities = {googleEnabled:false,mailEnabled:mail.enabled};
+  const capabilities = {googleEnabled:!!config.google,mailEnabled:mail.enabled};
   const send = (to: string, purpose: "verify_email" | "reset_password", token: string) => mail.sendAccountMail({ to, purpose, url: accountMailUrl(config.appUrl, purpose, token) });
   async function budget(res: Response, action: "registration" | "recovery" | "resend", account: string, ip: string): Promise<boolean> {
     const policy = AUTH_RATE_LIMITS[action];
@@ -76,10 +82,17 @@ export function mountAuthRoutes(app: Express, auth: AuthStore, config: AuthConfi
       if (result.status === 429) res.setHeader("Retry-After","900");
       return error(res,result.status,result.status === 401 ? "Invalid credentials" : "Too many attempts; retry later");
     }
-    if (res.locals.sessionToken) await auth.revokeSession(res.locals.sessionToken);
-    res.cookie(cookies.session,result.token,options(config,7*86400000));
-    res.cookie(cookies.anonymous,"",options(config,0));
+    await establishSession(res,auth,config,result.token);
     return res.json({user:result.user,csrfToken:result.csrfToken,...capabilities} satisfies SessionView);
+  }));
+  app.post("/auth/reauthenticate",asyncRoute(async(req,res)=>{
+    if (!res.locals.user) return error(res,401,"Authentication required");
+    const result = await auth.reauthenticateLocalSession(res.locals.sessionToken,typeof req.body?.password === "string" ? req.body.password : "",req.ip ?? "unknown");
+    if (result.status !== 200) {
+      if (result.status === 429) res.setHeader("Retry-After","900");
+      return error(res,result.status,result.status === 401 ? "Invalid credentials" : "Too many attempts; retry later");
+    }
+    return res.status(204).end();
   }));
   app.post("/auth/logout",asyncRoute(async (_req,res)=>{
     if (res.locals.sessionToken) await auth.revokeSession(res.locals.sessionToken);

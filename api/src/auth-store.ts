@@ -4,6 +4,10 @@ import { hashPassword, hashToken, newToken, verifyPassword } from "./auth-crypto
 
 export interface AuthUser { id: string; username: string; email: string }
 export type TokenPurpose = "verify_email" | "reset_password";
+export interface OAuthState {
+  nonce: string; verifier_ciphertext: string; return_path: string;
+  link_user_id: string | null; link_session_hash: string | null;
+}
 
 export function isAccountEmail(email: string): boolean {
   return email.length <= 254 && /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email);
@@ -58,6 +62,10 @@ export class AuthStore {
   }
 
   async loginLocalUser(login: string, password: string, ip: string) {
+    return this.localAttempt(login,ip,(client,normalized)=>this.authenticateOn(client,normalized,password));
+  }
+
+  private async localAttempt<T extends object>(login: string, ip: string, attempt: (client: PoolClient, login: string) => Promise<T | null>) {
     return this.transaction(async client => {
       const normalized = login.trim().toLowerCase();
       const user = await client.query("SELECT id FROM app_users WHERE username=$1 OR email=$1",[normalized]);
@@ -72,10 +80,86 @@ export class AuthStore {
         const exhausted = await client.query("SELECT 1 FROM auth_rate_limits WHERE key_hash=$1 AND expires_at>clock_timestamp() AND attempts>=$2",[hashToken(keys[i]),policies[i].limit]);
         if (exhausted.rowCount) return {status:429 as const};
       }
-      const session = await this.authenticateOn(client,normalized,password);
+      const session = await attempt(client,normalized);
       if (session) return {status:200 as const,...session};
       for (let i=0;i<keys.length;i++) await this.incrementRateLimit(client,keys[i],policies[i].limit,policies[i].windowSeconds);
       return {status:401 as const};
+    });
+  }
+
+  async reauthenticateLocalSession(token: string, password: string, ip: string) {
+    const user = await this.resolveSession(token);
+    if (!user) return {status:401 as const};
+    return this.localAttempt(user.username,ip,async client=>{
+      const read = await client.query("SELECT password_hash FROM app_users WHERE id=$1",[user.id]);
+      const hash = read.rows[0]?.password_hash;
+      const valid = await verifyPassword(password,hash ?? "");
+      const locked = await client.query("SELECT password_hash,disabled_at,email_verified_at FROM app_users WHERE id=$1 FOR UPDATE",[user.id]);
+      const row = locked.rows[0];
+      if (!valid || !row || row.password_hash !== hash || row.disabled_at || !row.email_verified_at) return null;
+      const updated = await client.query("UPDATE auth_sessions SET reauthenticated_at=clock_timestamp() WHERE token_hash=$1 AND user_id=$2 AND expires_at>clock_timestamp() RETURNING id",[hashToken(token),user.id]);
+      return updated.rowCount ? {} : null;
+    });
+  }
+
+  async recentlyReauthenticated(token: string, userId: string): Promise<boolean> {
+    return this.recentOn(this.pool,hashToken(token),userId);
+  }
+
+  private async recentOn(db: Pick<Pool,"query">, sessionHash: string, userId: string): Promise<boolean> {
+    const result = await db.query(`SELECT 1 FROM auth_sessions s JOIN app_users u ON u.id=s.user_id
+      WHERE s.token_hash=$1 AND s.user_id=$2 AND s.expires_at>clock_timestamp()
+      AND s.reauthenticated_at>clock_timestamp()-interval '5 minutes' AND u.password_hash IS NOT NULL
+      AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL`,[sessionHash,userId]);
+    return !!result.rowCount;
+  }
+
+  async saveOAuthState(state: string, browser: string, record: OAuthState): Promise<void> {
+    await this.pool.query("DELETE FROM auth_oauth_states WHERE expires_at<=clock_timestamp()");
+    await this.pool.query(`INSERT INTO auth_oauth_states
+      (state_hash,browser_hash,nonce,verifier_ciphertext,link_user_id,link_session_hash,return_path,expires_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+interval '10 minutes')`,
+    [hashToken(state),hashToken(browser),record.nonce,record.verifier_ciphertext,record.link_user_id,record.link_session_hash,record.return_path]);
+  }
+
+  async consumeOAuthState(state: string, browser: string): Promise<OAuthState | null> {
+    await this.pool.query("DELETE FROM auth_oauth_states WHERE expires_at<=clock_timestamp()");
+    const result = await this.pool.query<OAuthState>(`DELETE FROM auth_oauth_states
+      WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>clock_timestamp() RETURNING *`,[hashToken(state),hashToken(browser)]);
+    return result.rows[0] ?? null;
+  }
+
+  async finishGoogleIdentity(identity: {issuer:string;subject:string;email:string}, link?: {userId:string;sessionHash:string}) {
+    if (identity.issuer !== "https://accounts.google.com" || !identity.subject || identity.subject.length>255 || !isAccountEmail(identity.email)) throw new Error("Invalid Google identity");
+    return this.transaction(async client=>{
+      // Serialize first sign-in and linking for this immutable issuer/subject, not its mutable email.
+      await client.query("SELECT pg_advisory_xact_lock($1::bigint)",[BigInt.asIntN(64,BigInt(`0x${hashToken(JSON.stringify([identity.issuer,identity.subject])).slice(0,16)}`)).toString()]);
+      const existing = await client.query("SELECT user_id FROM auth_google_identities WHERE issuer=$1 AND subject=$2",[identity.issuer,identity.subject]);
+      let userId: string;
+      if (link) {
+        await client.query("SELECT id FROM app_users WHERE id=$1 FOR UPDATE",[link.userId]);
+        await client.query("SELECT id FROM auth_sessions WHERE token_hash=$1 FOR UPDATE",[link.sessionHash]);
+        if (!await this.recentOn(client,link.sessionHash,link.userId)) return {status:403 as const};
+        if (existing.rowCount && existing.rows[0].user_id !== link.userId) return {status:409 as const};
+        const other = await client.query("SELECT subject FROM auth_google_identities WHERE user_id=$1",[link.userId]);
+        if (other.rowCount && other.rows[0].subject !== identity.subject) return {status:409 as const};
+        userId=link.userId;
+      } else if (existing.rowCount) {
+        userId=existing.rows[0].user_id;
+      } else {
+        // ON CONFLICT also handles concurrent registrations; never claim an existing email.
+        userId=randomUUID();
+        const username=`google_${userId.replaceAll("-","").slice(0,24)}`;
+        const created = await client.query(`INSERT INTO app_users (id,username,email,email_verified_at)
+          VALUES ($1,$2,$3,clock_timestamp()) ON CONFLICT DO NOTHING RETURNING id`,[userId,username,identity.email]);
+        if (!created.rowCount) return {status:409 as const};
+      }
+      const user = await client.query<AuthUser>(`SELECT id,username,email FROM app_users WHERE id=$1
+        AND disabled_at IS NULL AND email_verified_at IS NOT NULL FOR UPDATE`,[userId]);
+      if (!user.rowCount) return {status:403 as const};
+      if (!existing.rowCount) await client.query("INSERT INTO auth_google_identities (issuer,subject,user_id) VALUES ($1,$2,$3)",[identity.issuer,identity.subject,userId]);
+      if (link) return {status:204 as const};
+      return {status:200 as const,user:userView(user.rows[0]),...await this.insertSession(client,userId)};
     });
   }
 

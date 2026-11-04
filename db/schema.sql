@@ -32,6 +32,27 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS reauthenticated_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS auth_google_identities (
+  issuer TEXT NOT NULL CHECK (issuer = 'https://accounts.google.com'),
+  subject TEXT NOT NULL CHECK (char_length(subject) BETWEEN 1 AND 255),
+  user_id TEXT NOT NULL UNIQUE REFERENCES app_users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (issuer, subject)
+);
+CREATE TABLE IF NOT EXISTS auth_oauth_states (
+  state_hash TEXT PRIMARY KEY CHECK (state_hash ~ '^[a-f0-9]{64}$'),
+  browser_hash TEXT NOT NULL CHECK (browser_hash ~ '^[a-f0-9]{64}$'),
+  nonce TEXT NOT NULL,
+  verifier_ciphertext TEXT NOT NULL,
+  link_user_id TEXT REFERENCES app_users(id) ON DELETE CASCADE,
+  link_session_hash TEXT CHECK (link_session_hash ~ '^[a-f0-9]{64}$'),
+  return_path TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  CHECK ((link_user_id IS NULL) = (link_session_hash IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_auth_oauth_states_expiry ON auth_oauth_states(expires_at);
 
 CREATE TABLE IF NOT EXISTS auth_rate_limits (
   key_hash TEXT PRIMARY KEY CHECK (key_hash ~ '^[a-f0-9]{64}$'),

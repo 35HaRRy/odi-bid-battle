@@ -16,6 +16,7 @@ import { AuthStore } from "./auth-store.js";
 import { loadAuthConfig, validateAuthConfig, type AuthConfig } from "./auth-config.js";
 import { createAccountMailer, type AccountMailer } from "./auth-mail.js";
 import { mountAuthRoutes, mountAuthSecurity } from "./auth-routes.js";
+import { mountGoogleAuth } from "./auth-google.js";
 
 export interface AppOptions { config?: AuthConfig; mail?: AccountMailer }
 export { loadAuthConfig } from "./auth-config.js";
@@ -83,6 +84,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   });
   // Public account routes MUST stay before Task 5's mandatory domain authentication gate.
   mountAuthRoutes(app, auth, config, options.mail ?? createAccountMailer());
+  if (config.google) mountGoogleAuth(app,auth,{...config,...config.google});
   mountBattlefieldRoutes(app, store);
   mountTeamRoutes(app, store);
   mountLiveRoutes(app, store);
