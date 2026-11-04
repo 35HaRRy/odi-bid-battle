@@ -162,6 +162,52 @@ describe("POST /auctions/:id/start", () => {
 });
 
 describe("startAuction transaction", () => {
+  it.each(["add", "remove", "reorder", "edit", "edit-following"] as const)("rejects %s when start commits after draft preflight but before the mutation transaction", async (action) => {
+    const store = await ownedStore(DATABASE_URL);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const { auction, ids } = await seedReadyAuction(store);
+      if (action !== "edit-following") await store.renameAuction(auction.id, "Forked draft");
+      const extra = await store.saveCandidate("Extra", PNG, "image/png", "extra.png");
+      let notify!: () => void;
+      const reached = new Promise<void>(resolve => { notify = resolve; });
+      let paused = false;
+      const pause = async () => {
+        if (paused) return;
+        paused = true;
+        notify();
+        await gate;
+      };
+      // Pause only the mutation's connection/write; start runs on the real pool.
+      const delayedPool = {
+        query: async (text: string, params?: unknown[]) => {
+          if (/^\s*(INSERT|UPDATE|DELETE)\b/i.test(text)) await pause();
+          return store.pool!.query(text, params);
+        },
+        connect: async () => { await pause(); return store.pool!.connect(); },
+      };
+      const mutator = new PgStore(delayedPool).forUser(store.userId);
+      const operation = action === "add" ? mutator.addEntryToAuction(auction.id, extra.id)
+        : action === "remove" ? mutator.removeEntryFromAuction(auction.id, ids[0])
+        : action === "reorder" ? mutator.reorderEntryInAuction(auction.id, ids[0], 1)
+        : mutator.editDraftEntryCandidate(auction.id, ids[0], "Changed", null);
+      const outcome = operation.then(() => null, error => error);
+      await reached;
+      await store.startAuction(auction.id);
+      const live = await store.live.sendNext(auction.id);
+      const candidates = await store.listCandidates();
+      release();
+      expect(await outcome).toEqual(new AssetError("preparation locked"));
+      expect((await store.getAuction(auction.id)).entries).toEqual(ids);
+      expect(await store.live.getLive(auction.id)).toEqual(live);
+      expect(await store.listCandidates()).toEqual(candidates);
+    } finally {
+      release();
+      await store.close();
+    }
+  });
+
   it("blocks start until preparation constraints pass", async () => {
     const store = await ownedStore(DATABASE_URL);
     try {
