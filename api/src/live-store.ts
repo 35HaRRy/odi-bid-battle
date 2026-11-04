@@ -462,7 +462,7 @@ export class LiveStore {
               COALESCE(a.battlefield_geography, b.geography) AS geography,
               COALESCE(a.battlefield_history, b.history) AS history
        FROM auctions a
-        LEFT JOIN battlefields b ON b.id = a.battlefield_id AND b.owner_user_id=a.owner_user_id
+         LEFT JOIN battlefields b ON b.id = a.battlefield_id
         WHERE a.id=$1 AND a.owner_user_id=$2`,
        [auctionId, this.userId],
     );
@@ -487,7 +487,7 @@ export class LiveStore {
        FROM auction_live_acquired a
        JOIN candidates c ON c.id = a.candidate_id
        LEFT JOIN auction_entries e ON e.auction_id = a.auction_id AND e.candidate_id = a.candidate_id
-        WHERE a.auction_id=$1 AND c.owner_user_id=$2 ORDER BY e.position`,
+         WHERE a.auction_id=$1 AND EXISTS (SELECT 1 FROM auctions WHERE id=a.auction_id AND owner_user_id=$2) ORDER BY e.position`,
        [auctionId, this.userId],
     );
     const acquiredByTeam: LiveAcquired[][] = [[], []];

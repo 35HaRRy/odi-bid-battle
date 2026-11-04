@@ -17,7 +17,7 @@ import { loadAuthConfig, validateAuthConfig, type AuthConfig } from "./auth-conf
 import { createAccountMailer, type AccountMailer } from "./auth-mail.js";
 import { mountAuthRoutes, mountAuthSecurity } from "./auth-routes.js";
 import { mountGoogleAuth } from "./auth-google.js";
-import { AccessError, requestStore } from "./access.js";
+import { AccessError, requestStore, publicFlag, candidateContext } from "./access.js";
 
 export interface AppOptions { config?: AuthConfig; mail?: AccountMailer; allowedOrigin?: string }
 export { loadAuthConfig } from "./auth-config.js";
@@ -31,7 +31,7 @@ function toHttp(err: unknown): { status: number; body: string } {
     return { status: 400, body: "invalid preparation" };
   const msg = (err as Error).message ?? "";
   if (msg === "preparation locked") return { status: 409, body: msg };
-  if (msg === "invalid name" || msg === "invalid image" || msg === "invalid simulation prompt template")
+  if (msg === "invalid name" || msg === "invalid image" || msg === "invalid simulation prompt template" || msg === "invalid candidate context")
     return { status: 400, body: msg };
   if (/duplicate/i.test(msg)) return { status: 409, body: "duplicate entry" };
   if (
@@ -108,18 +108,19 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
         file.buffer,
         file.mimetype,
         file.originalname,
+        publicFlag(req.body?.isPublic),
       );
-      res.status(201).json({ id: rec.id, name: rec.name });
+      res.status(201).json({ id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic });
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
     }
   });
 
-  app.get("/candidates", async (_req, res) => {
+  app.get("/candidates", async (req, res) => {
     try {
-      const list = await requestStore(res).listCandidates();
-      res.json(list.map((c) => ({ id: c.id, name: c.name })));
+      const list = await requestStore(res).listCandidates(req.query.includePublic === "true");
+      res.json(list.map((c) => ({ id: c.id, name: c.name, ownerUserId: c.ownerUserId, isOwner: c.isOwner, isPublic: c.isPublic })));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -128,11 +129,12 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/candidates/:id", async (req, res) => {
     try {
-      const rec = await requestStore(res).getCandidate(req.params.id);
+      const rec = await requestStore(res).getCandidate(req.params.id, candidateContext(req.query));
       res.json({
         id: rec.id,
         name: rec.name,
         archived: rec.archivedAt !== null,
+        ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
       });
     } catch (err) {
       const h = toHttp(err);
@@ -142,7 +144,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/candidates/:id/image", async (req, res) => {
     try {
-      const rec = await requestStore(res).getCandidate(req.params.id);
+      const rec = await requestStore(res).getCandidate(req.params.id, candidateContext(req.query));
       res.setHeader("Content-Type", rec.imageMime || "image/png");
       res.setHeader("Cache-Control", "no-store");
       res.send(rec.image);
@@ -173,8 +175,9 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
           req.params.id,
           name,
           toImageInput(file),
+          publicFlag(req.body?.isPublic),
         );
-        res.json({ id: rec.id, name: rec.name });
+        res.json({ id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic });
       } catch (err) {
         const h = toHttp(err);
         return res.status(h.status).json({ error: h.body });
@@ -185,7 +188,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.post("/lists", async (req, res) => {
     try {
       const { name = "", isDraft = true } = req.body ?? {};
-      const rec = await requestStore(res).saveList(String(name), Boolean(isDraft));
+      const rec = await requestStore(res).saveList(String(name), Boolean(isDraft), publicFlag(req.body?.isPublic));
       res.status(201).json(rec);
     } catch (err) {
       const h = toHttp(err);
@@ -193,9 +196,9 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
     }
   });
 
-  app.get("/lists", async (_req, res) => {
+  app.get("/lists", async (req, res) => {
     try {
-      res.json(await requestStore(res).listLists());
+      res.json(await requestStore(res).listLists(req.query.includePublic === "true"));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -211,9 +214,19 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
     }
   });
 
+  app.patch("/lists/:id", async (req, res) => {
+    try {
+      const current = await requestStore(res).getList(req.params.id);
+      res.json(await requestStore(res).editList(req.params.id, String(req.body?.name ?? current.name), publicFlag(req.body?.isPublic)));
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
   app.post("/lists/:id/entries", async (req, res) => {
     try {
-      await requestStore(res).addEntryToList(req.params.id, String(req.body?.candidateId ?? ""));
+      await requestStore(res).addEntryToList(req.params.id, String(req.body?.candidateId ?? ""), req.body?.sourceListId === undefined ? undefined : String(req.body.sourceListId));
       res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
@@ -278,7 +291,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
           name,
           toImageInput(file),
         );
-        res.json({ candidate: { id: rec.id, name: rec.name }, list: await requestStore(res).getList(req.params.id) });
+        res.json({ candidate: { id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic }, list: await requestStore(res).getList(req.params.id) });
       } catch (err) {
         const h = toHttp(err);
         return res.status(h.status).json({ error: h.body });
@@ -389,6 +402,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
         await requestStore(res).addEntryToAuction(
           req.params.id,
           String(req.body?.candidateId ?? ""),
+          req.body?.sourceListId === undefined ? undefined : String(req.body.sourceListId),
         ),
       );
     } catch (err) {
@@ -437,7 +451,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
           toImageInput(file),
         );
         res.json({
-          candidate: { id: rec.id, name: rec.name },
+          candidate: { id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic },
           auction: await requestStore(res).getAuction(req.params.id),
         });
       } catch (err) {

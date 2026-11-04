@@ -16,6 +16,20 @@ async function saveSample(store: PgStore, name: string, byte: number) {
 }
 
 describe("candidate identity on edit", () => {
+  it("preserves catalog sharing on referenced replacement but context edits stay private", async () => {
+    const store = await ownedStore(DATABASE_URL);
+    try {
+      const c = await store.saveCandidate("Shared", Buffer.from([1]), "image/png", "one.png", true);
+      const list = await store.saveList("References", false, true);
+      await store.addEntryToList(list.id, c.id);
+      const replacement = await store.editCatalogCandidate(c.id, "Shared replacement", null);
+      expect(replacement).toMatchObject({ isPublic: true, isOwner: true, ownerUserId: store.userId });
+      expect(replacement.id).not.toBe(c.id);
+      const contextCopy = await store.editListEntryCandidate(list.id, c.id, "Private context copy", null);
+      expect(contextCopy.isPublic).toBe(false);
+      await expect(store.getCandidate(c.id, { listId: list.id })).rejects.toThrow("not found");
+    } finally { await store.close(); }
+  });
   it("edits an unreferenced catalog candidate in place", async () => {
     const store = await ownedStore(DATABASE_URL);
     try {

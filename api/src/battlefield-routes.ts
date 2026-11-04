@@ -2,7 +2,7 @@ import express from "express";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AccessError, requestStore } from "./access.js";
+import { AccessError, requestStore, publicFlag } from "./access.js";
 import { AssetError } from "./battlefield-domain.js";
 import { isMulterFileSizeError, uploadSingle } from "./upload.js";
 import { PayloadTooLargeError } from "./limits.js";
@@ -79,7 +79,8 @@ export function mountBattlefieldRoutes(app: express.Express): void {
         if (!file) return res.status(400).json({ error: "image required" });
         const rec = await requestStore(res).battlefields.create(
           { name: String(name), geography: String(geography), history: String(history) },
-          { buffer: file.buffer, mime: file.mimetype, name: file.originalname }
+          { buffer: file.buffer, mime: file.mimetype, name: file.originalname },
+          publicFlag(req.body?.isPublic)
         );
         const summary = {
           id: rec.id,
@@ -87,6 +88,7 @@ export function mountBattlefieldRoutes(app: express.Express): void {
           geography: rec.geography,
           history: rec.history,
           archivedAt: rec.archivedAt,
+          ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
         };
         res.status(201).json(summary);
       } catch (e) {
@@ -102,9 +104,9 @@ export function mountBattlefieldRoutes(app: express.Express): void {
   });
 
   // GET /battlefields
-  app.get("/battlefields", async (_req, res) => {
+  app.get("/battlefields", async (req, res) => {
     try {
-      const list = await requestStore(res).battlefields.list();
+      const list = await requestStore(res).battlefields.list(req.query.includePublic === "true");
       res.json(list);
     } catch (e) {
       res.status(500).json({ error: "persistence failed" });
@@ -121,6 +123,7 @@ export function mountBattlefieldRoutes(app: express.Express): void {
         geography: rec.geography,
         history: rec.history,
         archivedAt: rec.archivedAt,
+        ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
       };
       res.json(summary);
     } catch (e) {
@@ -165,7 +168,8 @@ export function mountBattlefieldRoutes(app: express.Express): void {
         const rec = await requestStore(res).battlefields.edit(
           req.params.id,
           { name: String(name), geography: String(geography), history: String(history) },
-          imageInput
+          imageInput,
+          publicFlag(req.body?.isPublic)
         );
         res.setHeader("Cache-Control", "no-store");
         res.json({
@@ -174,6 +178,7 @@ export function mountBattlefieldRoutes(app: express.Express): void {
           geography: rec.geography,
           history: rec.history,
           archivedAt: rec.archivedAt,
+          ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
         });
       } catch (e) {
         if (e instanceof AssetError || e instanceof AccessError) {

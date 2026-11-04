@@ -75,9 +75,21 @@ describe("battlefield persistence", () => {
     const original = await assets.create(fields, image);
     const revised = { ...fields, name: " Revised ", geography: " Hill ", history: " New " };
     expect(await assets.edit(original.id, revised, null)).toEqual({
+      ...original,
       id: original.id, name: "Revised", geography: "Hill", history: "New", archivedAt: null, image,
     });
     expect(await assets.edit(original.id, fields, secondImage)).toEqual({ ...original, image: secondImage });
+  });
+
+  it("preserves sharing when a referenced battlefield is replaced and retains the selected version", async () => {
+    const original = await assets.create(fields, image, true);
+    const draft = await store.saveAuction("Consumer", null);
+    await assets.select(draft.id, original.id);
+    const replacement = await assets.edit(original.id, { ...fields, name: "Replacement" }, null);
+    expect(replacement.isPublic).toBe(true);
+    expect(replacement.id).not.toBe(original.id);
+    expect((await assets.getDraftBattlefield(draft.id))?.name).toBe(original.name);
+    expect((await assets.getDraftBattlefieldImage(draft.id)).buffer).toEqual(image.buffer);
   });
 
   it("lists only active summaries but retrieves archived records directly", async () => {

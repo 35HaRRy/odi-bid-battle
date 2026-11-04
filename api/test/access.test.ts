@@ -214,7 +214,7 @@ describe("domain ownership", () => {
   });
   it("ignores spoofed owners and sharing flags on all creation routes", async () => {
     for (const [client, owner, other] of [[alice, a, b], [bob, b, a]] as const) {
-      const spoof = { ownerUserId: other.userId, userId: other.userId, owner_user_id: other.userId, isPublic: true, is_public: true };
+      const spoof = { ownerUserId: other.userId, userId: other.userId, owner_user_id: other.userId, is_public: true };
       const forms = [
         ["/candidates", multipart({ name: "Created", ...Object.fromEntries(Object.entries(spoof).map(([k,v]) => [k, String(v)])) }), "candidates"],
         ["/battlefields", multipart({ ...fields, ...Object.fromEntries(Object.entries(spoof).map(([k,v]) => [k, String(v)])) }), "battlefields"],
