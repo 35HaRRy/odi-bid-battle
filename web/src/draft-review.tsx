@@ -192,7 +192,7 @@ export function DraftReview({
                 <ImagePreview
                   key={id}
                   lang={lang}
-                  src={api.imageUrl(id)}
+                  src={api.imageUrl(id, { auctionId: auction.id })}
                   alt={resolveName(id)}
                   enlargeLabel={resolveName(id)}
                   className="image-preview compact"

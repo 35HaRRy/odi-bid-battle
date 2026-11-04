@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api, type Auction, type Candidate, type CandidateList } from "./api";
+import { ApiError, api, type Auction, type Candidate, type CandidateList, type CandidateContext } from "./api";
 import { getLang, setLang, t, type Lang } from "./i18n";
 import { Modal } from "./modal";
 import { ImageField } from "./image-field";
@@ -53,20 +53,21 @@ function nameOf(
 
 function useMissingCandidateNames(
   candidates: Candidate[],
-  ids: string[],
+  references: { id: string; context: CandidateContext }[],
   onResolved: (c: Candidate[]) => void,
 ) {
   const [extra, setExtra] = useState<Record<string, string>>({});
   useEffect(() => {
     const known = new Set(candidates.map((c) => c.id));
-    const missing = [...new Set(ids)].filter((id) => !known.has(id) && !extra[id]);
+    const missing = [...new Map(references.map(ref => [ref.id, ref])).values()]
+      .filter(({ id }) => !known.has(id) && !extra[id]);
     if (missing.length === 0) return;
     let live = true;
     (async () => {
       const found: Candidate[] = [];
-      for (const id of missing.slice(0, 20)) {
+      for (const { id, context } of missing.slice(0, 20)) {
         try {
-          found.push(await api.getCandidate(id));
+          found.push(await api.getCandidate(id, context));
         } catch {
           // keep raw id fallback; existing reference stays visible
         }
@@ -83,7 +84,7 @@ function useMissingCandidateNames(
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ids.join("|"), candidates.length]);
+  }, [JSON.stringify(references), candidates.length]);
   return extra;
 }
 
@@ -431,6 +432,7 @@ function OrderedEntries({
   onEdit,
   emptyText,
   resolveName,
+  context,
 }: {
   lang: Lang;
   entries: string[];
@@ -440,6 +442,7 @@ function OrderedEntries({
   onEdit?: (id: string) => void;
   emptyText: string;
   resolveName?: (id: string) => string;
+  context: CandidateContext;
 }) {
   const label = (cid: string) =>
     resolveName ? resolveName(cid) : nameOf(candidates, cid);
@@ -448,7 +451,7 @@ function OrderedEntries({
       {entries.map((cid, idx) => (
         <li className="ordered-item" key={cid}>
           <span className="order-number">{idx + 1}</span>
-          <ImagePreview lang={lang} src={api.imageUrl(cid)} alt={label(cid)} enlargeLabel={label(cid)} className="ordered-thumb" />
+          <ImagePreview lang={lang} src={api.imageUrl(cid, context)} alt={label(cid)} enlargeLabel={label(cid)} className="ordered-thumb" />
           <span className="ordered-name">{label(cid)}</span>
           <div className="ordered-actions">
             {onEdit && (
@@ -750,8 +753,8 @@ function Lists({
   const [cloningId, setCloningId] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const active = lists.find((l) => l.id === activeId) ?? null;
-  const allEntryIds = lists.flatMap((l) => l.entries);
-  const extraNames = useMissingCandidateNames(candidates, allEntryIds, () => {});
+  const references = lists.flatMap((l) => l.entries.map((id) => ({ id, context: { listId: l.id } })));
+  const extraNames = useMissingCandidateNames(candidates, references, () => {});
   const resolveName = (id: string) => nameOf(candidates, id, extraNames);
   const editingCandidate =
     editingId ? [...candidates].find((c) => c.id === editingId) : null;
@@ -966,7 +969,7 @@ function Lists({
                 <ImagePreview
                   key={cid}
                   lang={lang}
-                  src={api.imageUrl(cid)}
+                  src={api.imageUrl(cid, { listId: l.id })}
                   alt={resolveName(cid)}
                   enlargeLabel={resolveName(cid)}
                   className="list-thumb"
@@ -1075,6 +1078,7 @@ function Lists({
             )}
             <OrderedEntries
               lang={lang}
+              context={{ listId: active.id }}
               entries={active.entries}
               candidates={candidates}
               onReorder={(cid, to) => mutate(api.reorder(active.id, cid, to))}
@@ -1098,7 +1102,7 @@ function Lists({
           title={t(lang, "editCandidate")}
           description={t(lang, "candidateCopy")}
           initialName={editingName}
-          previewUrl={api.imageUrl(editingId)}
+          previewUrl={api.imageUrl(editingId, editingScope === "entry" && active ? { listId: active.id } : undefined)}
           onClose={() => setEditingId(null)}
           onSave={editingScope === "entry" ? saveEntryEdit : saveCatalogEdit}
         />
@@ -1187,8 +1191,8 @@ function AuctionWorkspace({
               ? rawActive
               : (auctions.find((a) => a.status === "completed") ?? null))
           : rawActive;
-  const draftEntryIds = active ? active.entries : [];
-  const draftExtra = useMissingCandidateNames(candidates, draftEntryIds, () => {});
+  const draftReferences = active ? active.entries.map((id) => ({ id, context: { auctionId: active.id } })) : [];
+  const draftExtra = useMissingCandidateNames(candidates, draftReferences, () => {});
   const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
   const editingDraftName =
     (editingId ? candidates.find((c) => c.id === editingId)?.name : undefined) ??
@@ -1538,6 +1542,7 @@ function AuctionWorkspace({
                     </p>
                     <OrderedEntries
                       lang={lang}
+                      context={{ auctionId: active.id }}
                       entries={active.entries}
                       candidates={candidates}
                       onReorder={(cid, to) =>
@@ -1596,7 +1601,7 @@ function AuctionWorkspace({
             title={t(lang, "editCandidate")}
             description={t(lang, "candidateCopy")}
             initialName={editingDraftName}
-            previewUrl={api.imageUrl(editingId)}
+            previewUrl={api.imageUrl(editingId, { auctionId: active.id })}
             onClose={() => setEditingId(null)}
             onSave={saveDraftEntryEdit}
           />

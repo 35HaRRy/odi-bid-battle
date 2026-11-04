@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { api, ApiError, type BattlefieldSummary, type Auction, type DraftBattlefield } from "./api";
+import { api, apiRequest, ApiError, type BattlefieldSummary, type Auction, type DraftBattlefield } from "./api";
 import { t, type Lang } from "./i18n";
 import { Modal } from "./modal";
 import { ImageField } from "./image-field";
@@ -357,7 +357,7 @@ export function BattlefieldPreparation({
     let live = true;
     (async () => {
       try {
-        const res = await fetch(api.auctionBackgroundUrl(auction.id), { method: "HEAD" }).catch(() => null);
+        const res = await apiRequest(`/auctions/${auction.id}/background`, { method: "HEAD" }).catch(() => null);
         if (!live) return;
         const ct = res?.headers.get("content-type") ?? "";
         setBgCustom(!ct.includes("svg"));

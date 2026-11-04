@@ -190,7 +190,7 @@ export function LiveCouncil({
     }
     let cancelled = false;
     api
-      .getCandidate(id)
+      .getCandidate(id, { auctionId: auction.id })
       .then((c) => {
         if (!cancelled) setCandidateName(c.name);
       })
@@ -200,7 +200,7 @@ export function LiveCouncil({
     return () => {
       cancelled = true;
     };
-  }, [live?.activeCandidateId]);
+  }, [live?.activeCandidateId, auction.id]);
 
   async function run(action: () => Promise<LiveState>, onSuccess?: () => void) {
     if (pending) return;
@@ -519,7 +519,7 @@ export function LiveCouncil({
               {live.activeCandidateId && (
                 <ImagePreview
                   lang={lang}
-                  src={api.imageUrl(live.activeCandidateId)}
+                  src={api.imageUrl(live.activeCandidateId, { auctionId: auction.id })}
                   alt={candidateName || live.activeCandidateId}
                   className="candidate-image"
                 />
@@ -599,7 +599,7 @@ export function LiveCouncil({
             <div className="sale-details">
               {live.activeCandidateId && (
                 <img
-                  src={api.imageUrl(live.activeCandidateId)}
+                  src={api.imageUrl(live.activeCandidateId, { auctionId: auction.id })}
                   alt={candidateName || live.activeCandidateId}
                 />
               )}
@@ -807,7 +807,7 @@ function FinalPresentation({
               <div className="result-candidates" tabIndex={0} aria-label={`${team.name}: ${t(lang, "acquired")}`}>
                 {team.acquired.length > 0 ? team.acquired.map((candidate) => (
                   <article key={candidate.candidateId}>
-                    <img src={api.imageUrl(candidate.candidateId)} alt={candidate.name} />
+                    <img src={api.imageUrl(candidate.candidateId, { auctionId })} alt={candidate.name} />
                     <h3>{candidate.name}</h3>
                     <p>{candidate.price} {t(lang, "gold")}</p>
                   </article>
