@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
 import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
+import { fixtureFetch, fixtureOrigin, ownedStore } from "./helpers/domain.js";
 import {
   REQUEST_BODY_BUDGET_BYTES,
   SINGLE_FILE_LIMIT_BYTES,
@@ -62,34 +63,25 @@ describe("deployment budgets", () => {
   });
 });
 
-describe("budget enforcement over HTTP (no database)", () => {
-  // buildApp touches no database until a route handler queries it, so a
-  // dummy store proves budget rejections happen before any persistence.
-  // The fake connect satisfies the store getters at mount time only.
-  const failingStore = () =>
-    new PgStore({
-      query: async () => {
-        throw new Error("database must not be touched");
-      },
-      // Read by the store getters at mount time only; never called here.
-      connect: async () => {
-        throw new Error("database must not be touched");
-      },
-    } as unknown as ConstructorParameters<typeof PgStore>[0]);
-
+describe("budget enforcement over authenticated HTTP", () => {
+  let store: PgStore;
+  let fetch: Awaited<ReturnType<typeof fixtureFetch>>;
   let server: Server;
   let base: string;
 
   beforeEach(async () => {
-    const app = buildApp(failingStore());
+    store = await ownedStore(process.env.DATABASE_URL!);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", resolve));
     const addr = server.address();
     base = addr && typeof addr === "object" ? `http://127.0.0.1:${addr.port}` : "";
+    fetch = await fixtureFetch(base, store);
   });
 
   afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await store.close();
   });
 
   it("answers health and unknown paths as JSON", async () => {
@@ -110,7 +102,7 @@ describe("budget enforcement over HTTP (no database)", () => {
     expect(await res.json()).toEqual({ error: "payload too large" });
   });
 
-  it("rejects over-budget team payloads before touching the database", async () => {
+  it("rejects over-budget team payloads before domain persistence", async () => {
     const teams = teamWithFlag(3_400_000).map((team, i) => ({
       name: team.name,
       slogan: team.slogan,

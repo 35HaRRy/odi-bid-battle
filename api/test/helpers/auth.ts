@@ -11,6 +11,7 @@ export async function createVerifiedUser(pool: Pool, username: string): Promise<
 export async function authenticatedClient(
   base: string,
   credentials: { login: string; password: string },
+  allowedOrigin = new URL(base).origin,
 ): Promise<(path: string, init?: RequestInit) => Promise<Response>> {
   const origin = new URL(base).origin;
   const cookies = new Map<string, string>();
@@ -21,7 +22,7 @@ export async function authenticatedClient(
       throw new Error("Authenticated fixture only accepts same-origin paths");
     }
     const headers = new Headers(init.headers);
-    headers.set("Origin", origin);
+    headers.set("Origin", allowedOrigin);
     if (cookies.size) headers.set("Cookie", [...cookies].map(([key, value]) => `${key}=${value}`).join("; "));
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
     const response = await fetch(url, { ...init, headers, redirect: "error" });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { AccessError } from "./access.js";
 import { AssetError, validateAssetImage } from "./battlefield-domain.js";
 import type { AuctionTeam } from "./domain.js";
 
@@ -71,7 +72,9 @@ function toTeam(row: TeamRow, members: MemberRow[]): AuctionTeam {
 // Focused repository for auction-scoped teams. The caller (PgStore) owns the
 // shared pool and translates infrastructure errors at its boundary.
 export class TeamStore {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly userId: string) {
+    if (!userId) throw new AccessError();
+  }
 
   private async transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
@@ -90,11 +93,11 @@ export class TeamStore {
 
   private async lockDraft(client: PoolClient, auctionId: string): Promise<void> {
     const result = await client.query<{ status: string }>(
-      "SELECT status FROM auctions WHERE id=$1 FOR UPDATE",
-      [auctionId],
+      "SELECT status FROM auctions WHERE id=$1 AND owner_user_id=$2 FOR UPDATE",
+      [auctionId, this.userId],
     );
     const row = result.rows[0];
-    if (!row) throw new AssetError("auction not found");
+    if (!row) throw new AccessError();
     if (row.status !== "draft") throw new AssetError("preparation locked");
   }
 
@@ -104,21 +107,20 @@ export class TeamStore {
   ): Promise<TeamImageUpload> {
     validateAssetImage(image);
     if (!image.name.trim()) throw new AssetError("invalid image");
-    const exists = await this.pool.query("SELECT status FROM auctions WHERE id=$1", [auctionId]);
-    const row = exists.rows[0] as { status: string } | undefined;
-    if (!row) throw new AssetError("auction not found");
-    if (row.status !== "draft") throw new AssetError("preparation locked");
     const id = randomUUID();
-    await this.pool.query(
+    await this.transaction(async client => {
+      await this.lockDraft(client, auctionId);
+      await client.query(
       "INSERT INTO auction_team_image_uploads (id, auction_id, image, image_mime, image_name) VALUES ($1,$2,$3,$4,$5)",
       [id, auctionId, image.buffer, image.mime, image.name],
-    );
+      );
+    });
     await this.pool
-      .query("DELETE FROM auction_team_image_uploads WHERE created_at < now() - interval '24 hours'")
+      .query("DELETE FROM auction_team_image_uploads WHERE created_at < now() - interval '24 hours' AND EXISTS (SELECT 1 FROM auctions WHERE id=auction_id AND owner_user_id=$1)", [this.userId])
       .catch(() => undefined);
     const saved = await this.pool.query<TeamImageUploadRow>(
-      "SELECT * FROM auction_team_image_uploads WHERE id=$1",
-      [id],
+      "SELECT * FROM auction_team_image_uploads WHERE id=$1 AND EXISTS (SELECT 1 FROM auctions WHERE id=auction_id AND owner_user_id=$2)",
+      [id, this.userId],
     );
     const savedRow = saved.rows[0];
     return {
@@ -133,11 +135,11 @@ export class TeamStore {
 
   async getTeamImageUpload(uploadId: string): Promise<TeamImageUpload> {
     const result = await this.pool.query<TeamImageUploadRow>(
-      "SELECT * FROM auction_team_image_uploads WHERE id=$1",
-      [uploadId],
+      "SELECT * FROM auction_team_image_uploads WHERE id=$1 AND EXISTS (SELECT 1 FROM auctions WHERE id=auction_id AND owner_user_id=$2)",
+      [uploadId, this.userId],
     );
     const row = result.rows[0];
-    if (!row) throw new AssetError("invalid image");
+    if (!row) throw new AccessError();
     return {
       id: row.id,
       auctionId: row.auction_id,
@@ -153,9 +155,9 @@ export class TeamStore {
       flag_image: Buffer;
       flag_mime: string;
       flag_name: string;
-    }>("SELECT flag_image, flag_mime, flag_name FROM auction_teams WHERE id=$1", [teamId]);
+    }>("SELECT flag_image, flag_mime, flag_name FROM auction_teams WHERE id=$1 AND EXISTS (SELECT 1 FROM auctions WHERE id=auction_id AND owner_user_id=$2)", [teamId, this.userId]);
     const row = result.rows[0];
-    if (!row) throw new AssetError("invalid image");
+    if (!row) throw new AccessError();
     return { buffer: Buffer.from(row.flag_image), mime: row.flag_mime, name: row.flag_name };
   }
 
@@ -164,9 +166,9 @@ export class TeamStore {
       avatar_image: Buffer | null;
       avatar_mime: string | null;
       avatar_name: string | null;
-    }>("SELECT avatar_image, avatar_mime, avatar_name FROM auction_team_members WHERE id=$1", [memberId]);
+    }>("SELECT avatar_image, avatar_mime, avatar_name FROM auction_team_members WHERE id=$1 AND EXISTS (SELECT 1 FROM auction_teams t JOIN auctions a ON a.id=t.auction_id WHERE t.id=team_id AND a.owner_user_id=$2)", [memberId, this.userId]);
     const row = result.rows[0];
-    if (!row) throw new AssetError("invalid image");
+    if (!row) throw new AccessError();
     if (!row.avatar_image) return null;
     return {
       buffer: Buffer.from(row.avatar_image),
@@ -177,21 +179,21 @@ export class TeamStore {
 
   async deleteTeamImageUploads(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
-    await this.pool.query("DELETE FROM auction_team_image_uploads WHERE id=ANY($1)", [ids]).catch(() => undefined);
+    await this.pool.query("DELETE FROM auction_team_image_uploads WHERE id=ANY($1) AND EXISTS (SELECT 1 FROM auctions WHERE id=auction_id AND owner_user_id=$2)", [ids, this.userId]).catch(() => undefined);
   }
 
   async getAuctionTeams(auctionId: string): Promise<AuctionTeam[]> {
-    const exists = await this.pool.query("SELECT 1 FROM auctions WHERE id=$1", [auctionId]);
-    if (exists.rows.length === 0) throw new AssetError("auction not found");
+    const exists = await this.pool.query("SELECT 1 FROM auctions WHERE id=$1 AND owner_user_id=$2", [auctionId, this.userId]);
+    if (exists.rows.length === 0) throw new AccessError();
     const teams = await this.pool.query<TeamRow>(
-      "SELECT * FROM auction_teams WHERE auction_id=$1 ORDER BY position, created_at, id",
-      [auctionId],
+      "SELECT * FROM auction_teams WHERE auction_id=$1 AND EXISTS (SELECT 1 FROM auctions WHERE id=auction_id AND owner_user_id=$2) ORDER BY position, created_at, id",
+      [auctionId, this.userId],
     );
     const out: AuctionTeam[] = [];
     for (const row of teams.rows) {
       const members = await this.pool.query<MemberRow>(
-        "SELECT * FROM auction_team_members WHERE team_id=$1 ORDER BY created_at, id",
-        [row.id],
+        "SELECT * FROM auction_team_members WHERE team_id=$1 AND EXISTS (SELECT 1 FROM auction_teams t JOIN auctions a ON a.id=t.auction_id WHERE t.id=team_id AND a.owner_user_id=$2) ORDER BY created_at, id",
+        [row.id, this.userId],
       );
       out.push(toTeam(row, members.rows));
     }

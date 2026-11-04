@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { AccessError, assertOwnedAuction } from "./access.js";
 import {
   completeSale as completeSalePure,
   confirmBid as confirmBidPure,
@@ -114,7 +115,9 @@ interface MemberRow {
 // Focused repository for the live bidding round. The caller (PgStore) owns
 // the shared pool and translates infrastructure errors at its boundary.
 export class LiveStore {
-  constructor(private readonly pool: Pool, private readonly client?: PoolClient) {}
+  constructor(private readonly pool: Pool, private readonly userId: string, private readonly client?: PoolClient) {
+    if (!userId) throw new AccessError();
+  }
 
   private get q(): Pool | PoolClient { return this.client ?? this.pool; }
 
@@ -127,8 +130,8 @@ export class LiveStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("SELECT id FROM auctions WHERE id=$1 FOR UPDATE", [auctionId]);
-      const result = await operation(new LiveStore(this.pool, client));
+      await assertOwnedAuction(client, auctionId, this.userId);
+      const result = await operation(new LiveStore(this.pool, this.userId, client));
       await client.query("COMMIT");
       return result;
     } catch (err) {
@@ -146,8 +149,8 @@ export class LiveStore {
     allowCompleted: boolean,
   ): Promise<{ entries: string[]; status: string }> {
     const head = await this.q.query<{ status: string }>(
-      "SELECT status FROM auctions WHERE id=$1",
-      [auctionId],
+      "SELECT status FROM auctions WHERE id=$1 AND owner_user_id=$2",
+      [auctionId, this.userId],
     );
     if (head.rows.length === 0) throw new Error("auction not found");
     if (head.rows[0].status === "draft") throw new Error("auction not started");
@@ -459,9 +462,9 @@ export class LiveStore {
               COALESCE(a.battlefield_geography, b.geography) AS geography,
               COALESCE(a.battlefield_history, b.history) AS history
        FROM auctions a
-       LEFT JOIN battlefields b ON b.id = a.battlefield_id
-       WHERE a.id=$1`,
-      [auctionId],
+        LEFT JOIN battlefields b ON b.id = a.battlefield_id AND b.owner_user_id=a.owner_user_id
+        WHERE a.id=$1 AND a.owner_user_id=$2`,
+       [auctionId, this.userId],
     );
     const { teams, members } = await this.loadTeams(auctionId);
     const balances = await this.ensureBalances(auctionId, members);
@@ -484,8 +487,8 @@ export class LiveStore {
        FROM auction_live_acquired a
        JOIN candidates c ON c.id = a.candidate_id
        LEFT JOIN auction_entries e ON e.auction_id = a.auction_id AND e.candidate_id = a.candidate_id
-       WHERE a.auction_id=$1 ORDER BY e.position`,
-      [auctionId],
+        WHERE a.auction_id=$1 AND c.owner_user_id=$2 ORDER BY e.position`,
+       [auctionId, this.userId],
     );
     const acquiredByTeam: LiveAcquired[][] = [[], []];
     for (const r of acquired.rows)

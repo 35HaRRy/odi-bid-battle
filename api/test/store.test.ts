@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PersistenceError, PgStore } from "../src/store.js";
+import { ownedStore } from "./helpers/domain.js";
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -13,7 +14,7 @@ describe("store failure surface", () => {
       },
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const store = new PgStore(failingPool as any);
+    const store = new PgStore(failingPool as any).forUser("fixture-owner");
     await expect(
       store.saveCandidate("A", Buffer.from([1]), "image/png", "a.png"),
     ).rejects.toBeInstanceOf(PersistenceError);
@@ -22,7 +23,7 @@ describe("store failure surface", () => {
 
 describe("pg persist/rehydrate", () => {
   it("saves candidates, lists, entries; rejects duplicates; survives re-read", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const c1 = await store.saveCandidate(
         "Aday 1",
@@ -50,7 +51,7 @@ describe("pg persist/rehydrate", () => {
       expect(moved.entries).toEqual([c2.id, c1.id]);
 
       // simulate app restart: fresh connection reads same rows + image bytes
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try {
         const again = await fresh.getList(list.id);
         expect(again.entries).toEqual([c2.id, c1.id]);

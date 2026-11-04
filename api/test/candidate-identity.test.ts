@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PgStore } from "../src/store.js";
+import { ownedStore } from "./helpers/domain.js";
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -16,7 +17,7 @@ async function saveSample(store: PgStore, name: string, byte: number) {
 
 describe("candidate identity on edit", () => {
   it("edits an unreferenced catalog candidate in place", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const c = await saveSample(store, "Yalin Aday", 11);
       const updated = await store.editCatalogCandidate(c.id, "Yalin Aday v2", null);
@@ -29,7 +30,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("copies a referenced candidate, archives the original, keeps old lists on the original", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Katalog A", 21);
       const list = await store.saveList("Liste Ref", true);
@@ -54,7 +55,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("editing a list entry always creates a new record used only in that list", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Liste Aday", 31);
       const l1 = await store.saveList("Liste Bir", true);
@@ -73,7 +74,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("editing a draft entry forks the draft and uses the new record there", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Taslak Aday", 41);
       const list = await store.saveList("Kaynak Liste", true);
@@ -96,7 +97,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("archiving a list hides it from selection but keeps auctions created from it", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Arsiv Aday", 51);
       const list = await store.saveList("Arsiv Liste", true);
@@ -114,7 +115,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("resolves archived candidates by id for existing references", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Eski Aday", 61);
       const list = await store.saveList("Eski Liste", true);

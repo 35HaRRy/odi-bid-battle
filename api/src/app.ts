@@ -17,12 +17,14 @@ import { loadAuthConfig, validateAuthConfig, type AuthConfig } from "./auth-conf
 import { createAccountMailer, type AccountMailer } from "./auth-mail.js";
 import { mountAuthRoutes, mountAuthSecurity } from "./auth-routes.js";
 import { mountGoogleAuth } from "./auth-google.js";
+import { AccessError, requestStore } from "./access.js";
 
-export interface AppOptions { config?: AuthConfig; mail?: AccountMailer }
+export interface AppOptions { config?: AuthConfig; mail?: AccountMailer; allowedOrigin?: string }
 export { loadAuthConfig } from "./auth-config.js";
 export type { AuthConfig } from "./auth-config.js";
 
 function toHttp(err: unknown): { status: number; body: string } {
+  if (err instanceof AccessError) return { status: 404, body: "not found" };
   if (err instanceof AssetError) return assetErrorHttp(err) as { status: number; body: string };
   if (err instanceof PayloadTooLargeError) return { status: 413, body: err.message };
   if (err instanceof StartValidationError)
@@ -55,7 +57,7 @@ function toImageInput(
 // startup in web/api/index.ts.
 export function buildApp(store: PgStore, options: AppOptions = {}): express.Express {
   const app = express();
-  const config = validateAuthConfig(options.config ?? loadAuthConfig());
+  const config = validateAuthConfig({ ...(options.config ?? loadAuthConfig()), ...(options.allowedOrigin ? { allowedOrigin: options.allowedOrigin } : {}) });
   if (!store.pool) throw new Error("Authentication database required");
   const auth = new AuthStore(store.pool);
   app.use(cors({ origin: config.allowedOrigin, credentials: true, allowedHeaders: ["Content-Type", "X-CSRF-Token"] }));
@@ -85,18 +87,23 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   // Public account routes MUST stay before Task 5's mandatory domain authentication gate.
   mountAuthRoutes(app, auth, config, options.mail ?? createAccountMailer());
   if (config.google) mountGoogleAuth(app,auth,{...config,...config.google});
-  mountBattlefieldRoutes(app, store);
-  mountTeamRoutes(app, store);
-  mountLiveRoutes(app, store);
-
   app.get("/health", (_req, res) => res.json({ ok: true }));
+  app.use((_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!res.locals.user) return res.status(401).json({ error: "authentication required" });
+    res.locals.store = store.forUser(res.locals.user.id);
+    next();
+  });
+  mountBattlefieldRoutes(app);
+  mountTeamRoutes(app);
+  mountLiveRoutes(app);
 
   app.post("/candidates", uploadSingle("image"), async (req, res) => {
     try {
       const name = String(req.body?.name ?? "");
       const file = req.file;
       if (!file) return res.status(400).json({ error: "image required" });
-      const rec = await store.saveCandidate(
+      const rec = await requestStore(res).saveCandidate(
         name,
         file.buffer,
         file.mimetype,
@@ -111,7 +118,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/candidates", async (_req, res) => {
     try {
-      const list = await store.listCandidates();
+      const list = await requestStore(res).listCandidates();
       res.json(list.map((c) => ({ id: c.id, name: c.name })));
     } catch (err) {
       const h = toHttp(err);
@@ -121,7 +128,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/candidates/:id", async (req, res) => {
     try {
-      const rec = await store.getCandidate(req.params.id);
+      const rec = await requestStore(res).getCandidate(req.params.id);
       res.json({
         id: rec.id,
         name: rec.name,
@@ -135,7 +142,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/candidates/:id/image", async (req, res) => {
     try {
-      const rec = await store.getCandidate(req.params.id);
+      const rec = await requestStore(res).getCandidate(req.params.id);
       res.setHeader("Content-Type", rec.imageMime || "image/png");
       res.setHeader("Cache-Control", "no-store");
       res.send(rec.image);
@@ -147,7 +154,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.post("/candidates/:id/archive", async (req, res) => {
     try {
-      await store.archiveCandidate(req.params.id);
+      await requestStore(res).archiveCandidate(req.params.id);
       res.json({ ok: true });
     } catch (err) {
       const h = toHttp(err);
@@ -162,7 +169,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
       try {
         const name = String(req.body?.name ?? "");
         const file = req.file;
-        const rec = await store.editCatalogCandidate(
+        const rec = await requestStore(res).editCatalogCandidate(
           req.params.id,
           name,
           toImageInput(file),
@@ -178,7 +185,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.post("/lists", async (req, res) => {
     try {
       const { name = "", isDraft = true } = req.body ?? {};
-      const rec = await store.saveList(String(name), Boolean(isDraft));
+      const rec = await requestStore(res).saveList(String(name), Boolean(isDraft));
       res.status(201).json(rec);
     } catch (err) {
       const h = toHttp(err);
@@ -188,7 +195,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/lists", async (_req, res) => {
     try {
-      res.json(await store.listLists());
+      res.json(await requestStore(res).listLists());
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -197,7 +204,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/lists/:id", async (req, res) => {
     try {
-      res.json(await store.getList(req.params.id));
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -206,8 +213,8 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.post("/lists/:id/entries", async (req, res) => {
     try {
-      await store.addEntryToList(req.params.id, String(req.body?.candidateId ?? ""));
-      res.json(await store.getList(req.params.id));
+      await requestStore(res).addEntryToList(req.params.id, String(req.body?.candidateId ?? ""));
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -216,8 +223,8 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.delete("/lists/:id/entries/:candidateId", async (req, res) => {
     try {
-      await store.removeEntryFromList(req.params.id, req.params.candidateId);
-      res.json(await store.getList(req.params.id));
+      await requestStore(res).removeEntryFromList(req.params.id, req.params.candidateId);
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -226,12 +233,12 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.post("/lists/:id/reorder", async (req, res) => {
     try {
-      await store.reorderEntryInList(
+      await requestStore(res).reorderEntryInList(
         req.params.id,
         String(req.body?.candidateId ?? ""),
         Number(req.body?.toIndex ?? 0),
       );
-      res.json(await store.getList(req.params.id));
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -240,7 +247,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.post("/lists/:id/archive", async (req, res) => {
     try {
-      await store.archiveList(req.params.id);
+      await requestStore(res).archiveList(req.params.id);
       res.json({ ok: true });
     } catch (err) {
       const h = toHttp(err);
@@ -250,7 +257,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.post("/lists/:id/clone", async (req, res) => {
     try {
-      const rec = await store.cloneList(req.params.id);
+      const rec = await requestStore(res).cloneList(req.params.id);
       res.status(201).json(rec);
     } catch (err) {
       const h = toHttp(err);
@@ -265,13 +272,13 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
       try {
         const name = String(req.body?.name ?? "");
         const file = req.file;
-        const rec = await store.editListEntryCandidate(
+        const rec = await requestStore(res).editListEntryCandidate(
           req.params.id,
           req.params.candidateId,
           name,
           toImageInput(file),
         );
-        res.json({ candidate: { id: rec.id, name: rec.name }, list: await store.getList(req.params.id) });
+        res.json({ candidate: { id: rec.id, name: rec.name }, list: await requestStore(res).getList(req.params.id) });
       } catch (err) {
         const h = toHttp(err);
         return res.status(h.status).json({ error: h.body });
@@ -282,7 +289,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.post("/auctions", async (req, res) => {
     try {
       const { name = "", sourceListId = null, simulationPromptTemplate = "" } = req.body ?? {};
-      const rec = await store.saveAuction(
+      const rec = await requestStore(res).saveAuction(
         String(name),
         sourceListId ? String(sourceListId) : null,
         typeof simulationPromptTemplate === "string" ? simulationPromptTemplate : "",
@@ -297,7 +304,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.post("/auctions/:id/clone", async (req, res) => {
     try {
       const name = String(req.body?.name ?? "");
-      res.status(201).json(await store.cloneAuction(req.params.id, name));
+      res.status(201).json(await requestStore(res).cloneAuction(req.params.id, name));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -306,7 +313,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/auctions", async (_req, res) => {
     try {
-      res.json(await store.listAuctions());
+      res.json(await requestStore(res).listAuctions());
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -315,7 +322,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.get("/auctions/:id", async (req, res) => {
     try {
-      res.json(await store.getAuction(req.params.id));
+      res.json(await requestStore(res).getAuction(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -324,7 +331,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.delete("/auctions/:id", async (req, res) => {
     try {
-      await store.deleteDraftAuction(req.params.id);
+      await requestStore(res).deleteDraftAuction(req.params.id);
       res.status(204).end();
     } catch (err) {
       const h = toHttp(err);
@@ -334,7 +341,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.post("/auctions/:id/start", async (req, res) => {
     try {
-      res.json(await store.startAuction(req.params.id));
+      res.json(await requestStore(res).startAuction(req.params.id));
     } catch (err) {
       if (err instanceof StartValidationError) {
         return res
@@ -352,20 +359,20 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
       if (battlefieldId !== undefined && battlefieldId !== null && typeof battlefieldId !== "string") {
         return res.status(400).json({ error: "invalid battlefieldId" });
       }
-      let rec = await store.getAuction(req.params.id);
+      let rec = await requestStore(res).getAuction(req.params.id);
       if (req.body?.name !== undefined)
-        rec = await store.renameAuction(req.params.id, String(req.body.name));
+        rec = await requestStore(res).renameAuction(req.params.id, String(req.body.name));
       if (req.body?.simulationPromptTemplate !== undefined) {
         if (typeof req.body.simulationPromptTemplate !== "string") {
           return res.status(400).json({ error: "invalid simulation prompt template" });
         }
-        rec = await store.setSimulationPromptTemplate(
+        rec = await requestStore(res).setSimulationPromptTemplate(
           req.params.id,
           req.body.simulationPromptTemplate,
         );
       }
       if (req.body?.battlefieldId !== undefined)
-        rec = await store.setAuctionBattlefield(
+        rec = await requestStore(res).setAuctionBattlefield(
           req.params.id,
           battlefieldId,
         );
@@ -379,7 +386,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.post("/auctions/:id/entries", async (req, res) => {
     try {
       res.json(
-        await store.addEntryToAuction(
+        await requestStore(res).addEntryToAuction(
           req.params.id,
           String(req.body?.candidateId ?? ""),
         ),
@@ -393,7 +400,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.delete("/auctions/:id/entries/:candidateId", async (req, res) => {
     try {
       res.json(
-        await store.removeEntryFromAuction(req.params.id, req.params.candidateId),
+        await requestStore(res).removeEntryFromAuction(req.params.id, req.params.candidateId),
       );
     } catch (err) {
       const h = toHttp(err);
@@ -404,7 +411,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.post("/auctions/:id/reorder", async (req, res) => {
     try {
       res.json(
-        await store.reorderEntryInAuction(
+        await requestStore(res).reorderEntryInAuction(
           req.params.id,
           String(req.body?.candidateId ?? ""),
           Number(req.body?.toIndex ?? 0),
@@ -423,7 +430,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
       try {
         const name = String(req.body?.name ?? "");
         const file = req.file;
-        const rec = await store.editDraftEntryCandidate(
+        const rec = await requestStore(res).editDraftEntryCandidate(
           req.params.id,
           req.params.candidateId,
           name,
@@ -431,7 +438,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
         );
         res.json({
           candidate: { id: rec.id, name: rec.name },
-          auction: await store.getAuction(req.params.id),
+          auction: await requestStore(res).getAuction(req.params.id),
         });
       } catch (err) {
         const h = toHttp(err);

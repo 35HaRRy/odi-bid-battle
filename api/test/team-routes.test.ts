@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
 import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
+import { fixtureFetch, fixtureOrigin, ownedStore } from "./helpers/domain.js";
 
 // Minimal valid PNG so the shared magic-byte upload policy accepts it.
 const FLAG_BYTES = Buffer.from(
@@ -45,18 +46,20 @@ describe.sequential("Auction team HTTP routes", () => {
   let store: PgStore;
   let server: Server;
   let base: string;
+  let fetch: Awaited<ReturnType<typeof fixtureFetch>>;
 
   beforeEach(async () => {
-    store = await PgStore.connect(
+    store = await ownedStore(
       process.env.DATABASE_URL ?? "postgres://bidbattle:bidbattle@localhost:5433/bidbattle",
     );
-    const app = buildApp(store);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", resolve));
     const addr = server.address();
     if (addr && typeof addr === "object") {
       base = `http://127.0.0.1:${addr.port}`;
     }
+    fetch = await fixtureFetch(base, store);
   });
 
   afterEach(async () => {

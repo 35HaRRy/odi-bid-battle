@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PersistenceError, PgStore } from "../src/store.js";
+import { ownedStore } from "./helpers/domain.js";
 import { addTeamMember, createAuctionTeam } from "../src/domain.js";
 
 const DATABASE_URL =
@@ -18,14 +19,14 @@ describe("auction store failure surface", () => {
       },
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const store = new PgStore(failingPool as any);
+    const store = new PgStore(failingPool as any).forUser("fixture-owner");
     await expect(store.listAuctions()).rejects.toBeInstanceOf(PersistenceError);
   });
 });
 
 describe("pg auction persist/rehydrate", () => {
   it("clones preparation into an editable draft without live auction state", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const candidates = [];
       for (let i = 0; i < 4; i++) {
@@ -101,7 +102,7 @@ describe("pg auction persist/rehydrate", () => {
   }, 30000);
 
   it("creates drafts from lists, follows until fork, renames independently, resumes after restart", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const c1 = await store.saveCandidate(
         "Aday A1",
@@ -153,7 +154,7 @@ describe("pg auction persist/rehydrate", () => {
       );
 
       // restart: fresh connection reads same rows
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try {
         const again = await fresh.getAuction(d1.id);
         expect(again.entries).toContain(c3.id);
@@ -168,7 +169,7 @@ describe("pg auction persist/rehydrate", () => {
   }, 30000);
 
   it("persists the simulation prompt template and carries it into clones", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const d = await store.saveAuction("Şablonlu", null, "{{Savaş alanı}} {{1.takım metni}}");
       expect(d.simulationPromptTemplate).toBe("{{Savaş alanı}} {{1.takım metni}}");
@@ -186,11 +187,11 @@ describe("pg auction persist/rehydrate", () => {
   }, 30000);
 
   it("deletes drafts and refuses non-drafts", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const d = await store.saveAuction("Silinecek", null);
       await store.deleteDraftAuction(d.id);
-      await expect(store.getAuction(d.id)).rejects.toThrow("auction not found");
+      await expect(store.getAuction(d.id)).rejects.toThrow("not found");
       await expect(store.deleteDraftAuction("missing-id")).rejects.toThrow("auction not found");
     } finally {
       await store.close();
@@ -198,7 +199,7 @@ describe("pg auction persist/rehydrate", () => {
   }, 30000);
 
   it("refuses non-draft deletes and cascades entries and teams", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const c = await store.saveCandidate(
         "Aday Sil",
@@ -230,9 +231,9 @@ describe("pg auction persist/rehydrate", () => {
       addTeamMember(t2, "Deniz", 20);
       await store.teams.saveAuctionTeams(d.id, [t1, t2]);
       await store.deleteDraftAuction(d.id);
-      await expect(store.getAuction(d.id)).rejects.toThrow("auction not found");
+      await expect(store.getAuction(d.id)).rejects.toThrow("not found");
       await expect(store.teams.getAuctionTeams(d.id)).rejects.toThrow(
-        "auction not found",
+        "not found",
       );
       const left = await store.pool!.query(
         "SELECT COUNT(*)::int AS n FROM auction_entries WHERE auction_id=$1",

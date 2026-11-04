@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { AccessError } from "./access.js";
 import {
   AssetError,
   type AssetImage,
@@ -53,7 +54,9 @@ function record(row: BattlefieldRow): BattlefieldRecord {
 
 // The caller owns the shared pool and translates infrastructure errors at its boundary.
 export class BattlefieldStore {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly userId: string) {
+    if (!userId) throw new AccessError();
+  }
 
   private async transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
@@ -71,25 +74,25 @@ export class BattlefieldStore {
   }
 
   private async lockBattlefield(client: PoolClient, id: string): Promise<BattlefieldRecord> {
-    const result = await client.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1 FOR UPDATE", [id]);
-    if (!result.rows[0]) throw new AssetError("battlefield not found");
+    const result = await client.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1 AND owner_user_id=$2 FOR UPDATE", [id, this.userId]);
+    if (!result.rows[0]) throw new AccessError();
     return record(result.rows[0]);
   }
 
   private async lockDraft(client: PoolClient, id: string): Promise<{ battlefield_id: string | null }> {
     const result = await client.query<{ status: string; battlefield_id: string | null }>(
-      "SELECT status, battlefield_id FROM auctions WHERE id=$1 FOR UPDATE", [id],
+      "SELECT status, battlefield_id FROM auctions WHERE id=$1 AND owner_user_id=$2 FOR UPDATE", [id, this.userId],
     );
     const row = result.rows[0];
-    if (!row) throw new AssetError("auction not found");
+    if (!row) throw new AccessError();
     if (row.status !== "draft") throw new AssetError("preparation locked");
     return row;
   }
 
   private async insert(client: PoolClient, fields: BattlefieldFields, image: AssetImage): Promise<BattlefieldRecord> {
     const result = await client.query<BattlefieldRow>(
-      "INSERT INTO battlefields (id,name,geography,history,image,image_mime,image_name) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-      [randomUUID(), fields.name, fields.geography, fields.history, image.buffer, image.mime, image.name],
+      "INSERT INTO battlefields (id,name,geography,history,image,image_mime,image_name,owner_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
+      [randomUUID(), fields.name, fields.geography, fields.history, image.buffer, image.mime, image.name, this.userId],
     );
     return record(result.rows[0]);
   }
@@ -102,14 +105,14 @@ export class BattlefieldStore {
 
   async list(): Promise<BattlefieldSummary[]> {
     const result = await this.pool.query<BattlefieldRow>(
-      "SELECT id,name,geography,history,archived_at FROM battlefields WHERE archived_at IS NULL ORDER BY created_at, id",
+      "SELECT id,name,geography,history,archived_at FROM battlefields WHERE owner_user_id=$1 AND archived_at IS NULL ORDER BY created_at, id", [this.userId],
     );
     return result.rows.map(summary);
   }
 
   async get(id: string): Promise<BattlefieldRecord> {
-    const result = await this.pool.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1", [id]);
-    if (!result.rows[0]) throw new AssetError("battlefield not found");
+    const result = await this.pool.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1 AND owner_user_id=$2", [id, this.userId]);
+    if (!result.rows[0]) throw new AccessError();
     return record(result.rows[0]);
   }
 
@@ -121,7 +124,7 @@ export class BattlefieldStore {
       if (current.archivedAt !== null) throw new AssetError("battlefield archived");
       const chosenImage = image ?? current.image;
       const references = await client.query<{ referenced: boolean }>(
-        "SELECT EXISTS(SELECT 1 FROM auctions WHERE battlefield_id=$1) AS referenced", [id],
+        "SELECT EXISTS(SELECT 1 FROM auctions WHERE battlefield_id=$1 AND owner_user_id=$2) AS referenced", [id, this.userId],
       );
       if (references.rows[0].referenced) {
         const replacement = await this.insert(client, clean, chosenImage);
@@ -169,11 +172,11 @@ export class BattlefieldStore {
       battlefield_history: string | null;
       battlefield_image: Buffer | null;
     }>(
-      "SELECT battlefield_id, battlefield_geography, battlefield_history, battlefield_image FROM auctions WHERE id=$1",
-      [auctionId],
+      "SELECT battlefield_id, battlefield_geography, battlefield_history, battlefield_image FROM auctions WHERE id=$1 AND owner_user_id=$2",
+      [auctionId, this.userId],
     );
     const row = result.rows[0];
-    if (!row) throw new AssetError("auction not found");
+    if (!row) throw new AccessError();
     if (row.battlefield_id === null) return null;
     const base = await this.get(row.battlefield_id);
     return {
@@ -198,7 +201,7 @@ export class BattlefieldStore {
       const auction = await this.lockDraft(client, auctionId);
       if (auction.battlefield_id === null) throw new AssetError("battlefield not found");
       // Re-read the shared record for identity; overrides never touch it.
-      const baseResult = await client.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1", [auction.battlefield_id]);
+      const baseResult = await client.query<BattlefieldRow>("SELECT * FROM battlefields WHERE id=$1 AND owner_user_id=$2", [auction.battlefield_id, this.userId]);
       if (!baseResult.rows[0]) throw new AssetError("battlefield not found");
       const base = record(baseResult.rows[0]);
       if (image !== undefined) {
@@ -234,11 +237,11 @@ export class BattlefieldStore {
       battlefield_image_mime: string | null;
       battlefield_image_name: string | null;
     }>(
-      "SELECT battlefield_id, battlefield_image, battlefield_image_mime, battlefield_image_name FROM auctions WHERE id=$1",
-      [auctionId],
+      "SELECT battlefield_id, battlefield_image, battlefield_image_mime, battlefield_image_name FROM auctions WHERE id=$1 AND owner_user_id=$2",
+      [auctionId, this.userId],
     );
     const row = result.rows[0];
-    if (!row) throw new AssetError("auction not found");
+    if (!row) throw new AccessError();
     if (row.battlefield_image !== null) {
       return { buffer: Buffer.from(row.battlefield_image), mime: row.battlefield_image_mime!, name: row.battlefield_image_name! };
     }
@@ -262,9 +265,9 @@ export class BattlefieldStore {
       background_image: Buffer | null;
       background_mime: string | null;
       background_name: string | null;
-    }>("SELECT background_image,background_mime,background_name FROM auctions WHERE id=$1", [auctionId]);
+    }>("SELECT background_image,background_mime,background_name FROM auctions WHERE id=$1 AND owner_user_id=$2", [auctionId, this.userId]);
     const row = result.rows[0];
-    if (!row) throw new AssetError("auction not found");
+    if (!row) throw new AccessError();
     if (row.background_image === null) return null;
     return { buffer: Buffer.from(row.background_image), mime: row.background_mime!, name: row.background_name! };
   }
