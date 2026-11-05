@@ -1,12 +1,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createElement } from "react";
+import { Children, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AccountScreen, SessionOwner, accountRoute, captureAccountToken, postLoginDestination, safeDestination } from "./auth";
-import { apiRequest, setSessionCsrf } from "./api-transport";
+import { ApiError, apiRequest, setSessionCsrf } from "./api-transport";
 import type { SessionView } from "./auth-api";
+import { authApi } from "./auth-api";
+
+// Drive this component's handlers without adding a DOM/test-renderer dependency.
+const hooks = vi.hoisted(() => ({ values: null as unknown[] | null, cursor: 0 }));
+vi.mock("react", async importOriginal => {
+  const react = await importOriginal<typeof import("react")>();
+  return {
+    ...react,
+    useState: (initial: unknown) => {
+      if (!hooks.values) return react.useState(initial);
+      const index = hooks.cursor++;
+      if (!(index in hooks.values)) hooks.values[index] = initial;
+      return [hooks.values[index], (value: unknown) => { hooks.values![index] = value; }];
+    },
+    useRef: (initial: unknown) => hooks.values ? { current: initial } : react.useRef(initial),
+    useEffect: (...args: Parameters<typeof react.useEffect>) => hooks.values ? undefined : react.useEffect(...args),
+    useSyncExternalStore: (...args: Parameters<typeof react.useSyncExternalStore>) => hooks.values ? args[1]() : react.useSyncExternalStore(...args),
+  };
+});
+function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+  return Children.toArray(node).flatMap(child => isValidElement<Record<string, unknown>>(child)
+    ? [child, ...elements(child.props.children as ReactNode)] : []);
+}
 
 const view = (id: string | null): SessionView => ({ user: id ? { id, username: id, email: `${id}@example.test` } : null, csrfToken: "test-csrf", googleEnabled: false, mailEnabled: false });
-afterEach(() => { vi.unstubAllGlobals(); setSessionCsrf(""); });
+afterEach(() => { hooks.values = null; vi.restoreAllMocks(); vi.unstubAllGlobals(); setSessionCsrf(""); });
 describe("account routes", () => {
   it("accepts only known workspace destinations including legacy tabs", () => {
     expect(safeDestination("?tab=live")).toBe("/app?tab=live");
@@ -36,6 +59,31 @@ describe("account routes", () => {
   });
 });
 describe("session ownership", () => {
+  it("keeps a successful reset consumed when session refresh fails and reconnects", async () => {
+    const owner = new SessionOwner();
+    await owner.run(async () => view("alice"));
+    const reset = vi.spyOn(authApi, "resetPassword").mockResolvedValue();
+    vi.spyOn(authApi, "session").mockRejectedValue(new ApiError(503, "refresh unavailable"));
+    hooks.values = [];
+    const render = () => {
+      hooks.cursor = 0;
+      return AccountScreen({ owner, mode: "reset", token: "one-time-reset", lang: "en", onMode: () => {} });
+    };
+    let tree = render();
+    const input = elements(tree).find(element => element.props.name === "password")!;
+    (input.props.onChange as (event: unknown) => void)({ target: { value: "new-password-only" } });
+    tree = render();
+    const submit = elements(tree).find(element => element.type === "form")!.props.onSubmit as (event: unknown) => Promise<void>;
+    await submit({ preventDefault() {} });
+    expect(owner.snapshot().view?.user).toBeUndefined();
+    expect(renderToStaticMarkup(render())).toContain("Done. Sign in to continue.");
+    expect(renderToStaticMarkup(render())).not.toContain("new-password-only");
+    expect(renderToStaticMarkup(render())).toContain("The service is unavailable.");
+    expect(elements(render()).some(element => element.type === "form")).toBe(false);
+    await owner.run(async () => view(null));
+    expect(elements(render()).some(element => element.props.name === "password")).toBe(false);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
   it("gates workspace until bootstrap and clears it synchronously on expiry", async () => {
     const owner = new SessionOwner();
     expect(owner.snapshot().view?.user).toBeUndefined();

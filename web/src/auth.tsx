@@ -133,8 +133,14 @@ export function AccountScreen({ owner, mode, token, lang, onMode }: {
       else if (mode === "reset") {
         await authApi.resetPassword(token, password);
         if (current !== operation.current) return;
+        setPassword("");
+        setConsumed(true);
+        setMessage(t(lang, "auth_done"));
         owner.expire(false);
-        await owner.run(async () => ({ ...await authApi.session(), user: null }));
+        await owner.run(async () => ({ ...await authApi.session(), user: null })).catch(() => {
+          if (current === operation.current) setError(t(lang, "auth_serviceError"));
+        });
+        return;
       }
       else if (mode === "verify") await authApi.verifyEmail(token);
       else if (mode === "reauth" || mode === "link") {
@@ -146,7 +152,7 @@ export function AccountScreen({ owner, mode, token, lang, onMode }: {
       }
       if (current !== operation.current) return;
       setPassword("");
-      if (mode === "reset" || mode === "verify") setConsumed(true);
+      if (mode === "verify") setConsumed(true);
       setMessage(t(lang, ["register", "forgot"].includes(mode) ? "auth_mailSent" : "auth_done"));
     } catch (cause) {
       if (current !== operation.current) return;
