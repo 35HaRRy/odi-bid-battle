@@ -152,6 +152,8 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     selectList: "Listeyi seç",
     open: "Aç",
     added: "Listede",
+    targetOwnList: "Hedef listem",
+    addToOwnList: "Listeme ekle",
     edit: "Düzenle",
     editCandidate: "Adayın kopyasını düzenle",
     candidateCopy:
@@ -468,6 +470,8 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     selectList: "Select list",
     open: "Open",
     added: "Added",
+    targetOwnList: "My target list",
+    addToOwnList: "Add to my list",
     edit: "Edit",
     editCandidate: "Edit a candidate copy",
     candidateCopy:

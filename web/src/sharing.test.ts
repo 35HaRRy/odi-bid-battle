@@ -120,6 +120,34 @@ it("only_owner_gets_edit_controls", () => {
   expect(canEdit({ ...owner, isOwner: false }, "alice")).toBe(true);
 });
 
+it("takes one contextual private child from a public list into an existing owned private list", async () => {
+  const target: CandidateList = { ...owner, id: "target", name: "My private list", isDraft: false, entries: [] };
+  const other: CandidateList = { ...owner, id: "other", name: "Other own list", isDraft: false, entries: [] };
+  const source: CandidateList = { ...foreign, id: "source", name: "Public source", isDraft: false, entries: ["private-child", "unwanted-child"] };
+  vi.spyOn(api, "lists").mockImplementation(async includePublic => includePublic ? [target, other, source] : [target, other]);
+  vi.spyOn(api, "getCandidate").mockImplementation(async id => ({ ...foreign, id, name: id, isPublic: false }));
+  const add = vi.spyOn(api, "addEntry").mockResolvedValue({ ...other, entries: ["private-child"] });
+  const edit = vi.spyOn(api, "editList");
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => callback());
+  const render = mount(() => Lists({ lang: "en", userId: "alice", candidates: [], onCandidates: update, onError: error }));
+  render(); await settle(); toggle(render(), true); render(); await settle();
+  const sections = elements(render()).filter(el => el.type === "section" && el.props.className === "list-entry");
+  click(button(sections.find(section => renderToStaticMarkup(section).includes("Public source")), t("en", "selectList")));
+  let tree = render();
+  const picker = elements(tree).find(el => el.type === "select" && el.props["aria-label"] === t("en", "targetOwnList"))!;
+  expect(picker).toBeDefined();
+  expect(picker.props.value).toBe("target");
+  expect(renderToStaticMarkup(picker)).not.toContain("Public source");
+  (picker.props.onChange as (event: unknown) => void)({ target: { value: "other" } });
+  tree = render();
+  const ordered = elements(tree).find(el => typeof el.type === "function" && el.props.readOnly === true && Array.isArray(el.props.entries))!;
+  const rows = (ordered.type as (props: unknown) => ReactNode)(ordered.props);
+  await (elements(rows).find(el => el.type === "button" && el.props["aria-label"] === `private-child: ${t("en", "addToOwnList")}`)!.props.onClick as () => Promise<void>)();
+  expect(add).toHaveBeenCalledTimes(1);
+  expect(add).toHaveBeenCalledWith("other", "private-child", "source");
+  expect(edit).not.toHaveBeenCalled();
+});
+
 it("picker state is independent, public data remains discoverable with an empty own catalog, and disabling hides it immediately", async () => {
   const requests = vi.spyOn(api, "candidates").mockImplementation(async includePublic => includePublic ? [foreign] : []);
   const props = { lang: "en" as const, userId: "alice", candidates: [], addedIds: [], onAdd: update, onEdit: update };

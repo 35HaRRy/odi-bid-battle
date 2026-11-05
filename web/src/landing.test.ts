@@ -10,7 +10,12 @@ const hooks = vi.hoisted(() => ({ values: null as unknown[] | null, cursor: 0 })
 vi.mock("react", async original => {
   const react = await original<typeof import("react")>();
   return { ...react,
-    useState: (initial: unknown) => hooks.values ? [hooks.values[hooks.cursor++], vi.fn()] : react.useState(initial),
+    useState: (initial: unknown) => {
+      if (!hooks.values) return react.useState(initial);
+      const index = hooks.cursor++;
+      if (!(index in hooks.values)) hooks.values[index] = typeof initial === "function" ? initial() : initial;
+      return [hooks.values[index], (value: unknown) => { hooks.values![index] = value; }];
+    },
     useEffect: (...args: Parameters<typeof react.useEffect>) => hooks.values ? undefined : react.useEffect(...args),
     useSyncExternalStore: (...args: Parameters<typeof react.useSyncExternalStore>) => hooks.values ? args[1]() : react.useSyncExternalStore(...args),
   };
@@ -103,6 +108,23 @@ it("remounts account forms on mode changes so a consumed verification/reset cann
     keys.push(form.key);
   }
   expect(new Set(keys).size).toBe(3);
+});
+
+it("keeps the entered identifier outside keyed login/register forms", async () => {
+  const owner = new SessionOwner();
+  await owner.run(async () => ({ user: null, csrfToken: "synthetic", googleEnabled: false, mailEnabled: true }));
+  hooks.values = [owner, "en", new URL("https://example.test/account"), "", true, false];
+  vi.stubGlobal("window", { location: { href: "https://example.test/account" } });
+  const render = () => { hooks.cursor = 0; return elements(SessionBoundary({ children: vi.fn() })).find(el => el.type === AccountScreen)!; };
+  const login = render();
+  expect(login.props.onIdentifierChange).toBeTypeOf("function");
+  (login.props.onIdentifierChange as (value: string) => void)("remember@example.test");
+  hooks.values[2] = new URL("https://example.test/account?mode=register");
+  const register = render();
+  expect(register.key).not.toBe(login.key);
+  expect(register.props.identifier).toBe("remember@example.test");
+  hooks.values[2] = new URL("https://example.test/account");
+  expect(render().props.identifier).toBe("remember@example.test");
 });
 
 it.each(["reduced", "no-observer"])("keeps all content visible with %s", fallback => {

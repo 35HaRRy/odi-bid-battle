@@ -50,15 +50,36 @@ describe("account routes", () => {
     expect(postLoginDestination(new URL("https://example.test/account?returnTo=%2Fapp%3Ftab%3Ddraft"))).toBe("/app?tab=draft");
   });
   it("renders labeled reset form and explicit unavailable capabilities", () => {
-    const html = renderToStaticMarkup(createElement(AccountScreen, { owner: new SessionOwner(), mode: "reset", token: "", lang: "en", onMode: () => {} }));
+    const html = renderToStaticMarkup(createElement(AccountScreen, { owner: new SessionOwner(), mode: "reset", token: "", lang: "en", onMode: () => {}, identifier: "", onIdentifierChange: () => {} }));
     expect(html).toContain("expired");
     expect(html).not.toContain('name="password"');
-    const login = renderToStaticMarkup(createElement(AccountScreen, { owner: new SessionOwner(), mode: "login", token: "", lang: "en", onMode: () => {} }));
+    const login = renderToStaticMarkup(createElement(AccountScreen, { owner: new SessionOwner(), mode: "login", token: "", lang: "en", onMode: () => {}, identifier: "", onIdentifierChange: () => {} }));
     expect(login).toContain('autoComplete="username"');
     expect(login).toContain("Google sign-in is unavailable");
   });
 });
 describe("session ownership", () => {
+  it.each(["login", "register", "reset"] as const)("%s accepts 65 non-BMP password characters without native truncation and rejects 129 code points", async mode => {
+    const owner = new SessionOwner();
+    await owner.run(async () => ({ ...view(null), mailEnabled: true }));
+    const login = vi.spyOn(authApi, "login").mockResolvedValue(view("alice"));
+    const register = vi.spyOn(authApi, "register").mockResolvedValue();
+    const reset = vi.spyOn(authApi, "resetPassword").mockResolvedValue();
+    vi.spyOn(authApi, "session").mockResolvedValue(view(null));
+    hooks.values = [];
+    const render = () => { hooks.cursor = 0; return AccountScreen({ owner, mode, token: "reset-token", lang: "en", onMode: () => {}, identifier: "", onIdentifierChange: () => {} }); };
+    const input = () => elements(render()).find(el => el.props.name === "password")!;
+    expect(input().props.maxLength).toBeUndefined();
+    const change = (value: string) => (input().props.onChange as (event: unknown) => void)({ target: { value } });
+    const submit = () => (elements(render()).find(el => el.type === "form")!.props.onSubmit as (event: unknown) => Promise<void>)({ preventDefault() {} });
+    change("😀".repeat(129)); await submit();
+    expect(login).not.toHaveBeenCalled(); expect(register).not.toHaveBeenCalled(); expect(reset).not.toHaveBeenCalled();
+    const password = "😀".repeat(65);
+    change(password); await submit();
+    if (mode === "login") expect(login).toHaveBeenCalledWith("", password);
+    if (mode === "register") expect(register).toHaveBeenCalledWith({ username: "", email: "", password });
+    if (mode === "reset") expect(reset).toHaveBeenCalledWith("reset-token", password);
+  });
   it("keeps a successful reset consumed when session refresh fails and reconnects", async () => {
     const owner = new SessionOwner();
     await owner.run(async () => view("alice"));
@@ -67,7 +88,7 @@ describe("session ownership", () => {
     hooks.values = [];
     const render = () => {
       hooks.cursor = 0;
-      return AccountScreen({ owner, mode: "reset", token: "one-time-reset", lang: "en", onMode: () => {} });
+      return AccountScreen({ owner, mode: "reset", token: "one-time-reset", lang: "en", onMode: () => {}, identifier: "", onIdentifierChange: () => {} });
     };
     let tree = render();
     const input = elements(tree).find(element => element.props.name === "password")!;

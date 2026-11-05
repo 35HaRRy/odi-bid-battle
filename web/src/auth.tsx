@@ -93,11 +93,11 @@ export class SessionOwner {
   }
 }
 
-export function AccountScreen({ owner, mode, token, lang, onMode }: {
+export function AccountScreen({ owner, mode, token, lang, onMode, identifier: email, onIdentifierChange: setEmail }: {
   owner: SessionOwner; mode: AccountMode; token: string; lang: Lang; onMode: (mode: AccountMode) => void;
+  identifier: string; onIdentifierChange: (value: string) => void;
 }) {
   const state = useSyncExternalStore(owner.subscribe, owner.snapshot, owner.snapshot);
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
   const [pending, setPending] = useState(false);
@@ -125,6 +125,10 @@ export function AccountScreen({ owner, mode, token, lang, onMode }: {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (disabled) return;
+    if (passwordNeeded && (Array.from(password).length < 12 || Array.from(password).length > 128)) {
+      setError(t(lang, "auth_passwordHint"));
+      return;
+    }
     const current = ++operation.current;
     setPending(true); setError(""); setMessage("");
     try {
@@ -174,7 +178,7 @@ export function AccountScreen({ owner, mode, token, lang, onMode }: {
       {!invalidToken && !consumed && <form onSubmit={submit} aria-busy={pending}>
         {mode === "register" && <label htmlFor="account-username">{t(lang, "auth_username")}<input id="account-username" name="username" autoComplete="username" required minLength={3} maxLength={32} pattern="[A-Za-z0-9_]+" value={username} onChange={e => setUsername(e.target.value)} /></label>}
         {emailNeeded && <label htmlFor="account-email">{t(lang, mode === "login" ? "auth_loginId" : "auth_email")}<input id="account-email" name="email" type={mode === "login" ? "text" : "email"} autoComplete={mode === "login" ? "username" : "email"} required maxLength={254} value={email} onChange={e => setEmail(e.target.value)} /></label>}
-        {passwordNeeded && <label htmlFor="account-password"><span id="password-label">{t(lang, "auth_password")}</span><input id="account-password" name="password" type="password" autoComplete={mode === "register" || mode === "reset" ? "new-password" : "current-password"} required minLength={12} maxLength={128} value={password} onChange={e => setPassword(e.target.value)} aria-labelledby="password-label" aria-describedby="password-hint" /><small id="password-hint">{t(lang, "auth_passwordHint")}</small></label>}
+        {passwordNeeded && <label htmlFor="account-password"><span id="password-label">{t(lang, "auth_password")}</span><input id="account-password" name="password" type="password" autoComplete={mode === "register" || mode === "reset" ? "new-password" : "current-password"} required value={password} onChange={e => setPassword(e.target.value)} aria-labelledby="password-label" aria-describedby="password-hint" /><small id="password-hint">{t(lang, "auth_passwordHint")}</small></label>}
         <button className="primary" type="submit" disabled={disabled || ((mode === "link" || mode === "reauth") && !google)}>{pending ? t(lang, "auth_working") : title}</button>
       </form>}
       {(mode === "login" || mode === "register") && <>
@@ -205,6 +209,7 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
   const [token] = useState(initialToken);
   const [initialized, setInitialized] = useState(false);
   const [error, setError] = useState(false);
+  const [identifier, setIdentifier] = useState("");
   const mode = accountRoute(route);
   useEffect(() => {
     let refreshing = false;
@@ -258,7 +263,7 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
       window.history.pushState(null, "", url); setRoute(url);
     }} /> : !initialized || (state.busy && !!state.view?.user) ? <main className="account-shell" role="status">{t(lang, "auth_working")}</main> : state.blocked ? <main className="account-shell">{t(lang, "auth_logoutError")}</main> : showWorkspace ? <React.Fragment key={state.view!.user!.id}>{children(state.view!.user!)}</React.Fragment> : <>
       {!state.view && <button type="button" onClick={() => { setError(false); void owner.run(async () => ({ ...await authApi.session(), user: null })).catch(() => setError(true)); }}>{t(lang, "auth_retry")}</button>}
-      <AccountScreen key={mode} owner={owner} mode={!state.view?.user && (mode === "link" || mode === "reauth") ? "login" : mode} token={token} lang={lang} onMode={navigate} />
+      <AccountScreen key={mode} owner={owner} mode={!state.view?.user && (mode === "link" || mode === "reauth") ? "login" : mode} token={token} lang={lang} onMode={navigate} identifier={identifier} onIdentifierChange={setIdentifier} />
     </>}
   </>;
 }

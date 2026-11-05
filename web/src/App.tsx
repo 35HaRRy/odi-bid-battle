@@ -458,6 +458,9 @@ function OrderedEntries({
   resolveName,
   context,
   readOnly = false,
+  onAdd,
+  addedIds = [],
+  adding = false,
 }: {
   lang: Lang;
   entries: string[];
@@ -469,6 +472,9 @@ function OrderedEntries({
   resolveName?: (id: string) => string;
   context: CandidateContext;
   readOnly?: boolean;
+  onAdd?: (id: string) => void;
+  addedIds?: string[];
+  adding?: boolean;
 }) {
   const label = (cid: string) =>
     resolveName ? resolveName(cid) : nameOf(candidates, cid);
@@ -479,6 +485,7 @@ function OrderedEntries({
           <span className="order-number">{idx + 1}</span>
           <ImagePreview lang={lang} src={api.imageUrl(cid, context)} alt={label(cid)} enlargeLabel={label(cid)} className="ordered-thumb" />
           <span className="ordered-name">{label(cid)}</span>
+          {onAdd && <button className="secondary small-btn" aria-label={`${label(cid)}: ${t(lang, "addToOwnList")}`} disabled={adding || addedIds.includes(cid)} onClick={() => onAdd(cid)}>{t(lang, addedIds.includes(cid) ? "added" : "addToOwnList")}</button>}
           {!readOnly && <div className="ordered-actions">
             {onEdit && (
               <button
@@ -809,9 +816,13 @@ export function Lists({
   const [editingRoot, setEditingRoot] = useState<Candidate | null>(null);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
+  const [targetListId, setTargetListId] = useState("");
+  const [adding, setAdding] = useState(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const active = lists.find((l) => l.id === activeId) ?? (retainedList?.id === activeId ? retainedList : null);
   const editable = !!active && canEdit(active, userId);
+  const ownLists = lists.filter(l => canEdit(l, userId));
+  const targetList = ownLists.find(l => l.id === targetListId) ?? ownLists.find(l => !l.isPublic) ?? ownLists[0];
   const visibleLists = lists.filter(l => canEdit(l, userId) || (includePublic && l.isPublic));
   const references = [...lists, ...(active ? [active] : [])].flatMap((l) => l.entries.map((id) => ({ id, context: { listId: l.id } })));
   const extraNames = useMissingCandidateNames(candidates, references, () => {});
@@ -1103,6 +1114,12 @@ export function Lists({
               </span>
             </div>
             <p className="source">{t(lang, "savedSource")}</p>
+            {!editable && <label>{t(lang, "targetOwnList")}
+              <select aria-label={t(lang, "targetOwnList")} value={targetList?.id ?? ""} disabled={adding || !targetList} onChange={event => setTargetListId(event.target.value)}>
+                {!targetList && <option value="">{t(lang, "noLists")}</option>}
+                {ownLists.map(list => <option key={list.id} value={list.id}>{list.name || t(lang, "draft")} — {t(lang, list.isPublic ? "publicRecord" : "privateRecord")}</option>)}
+              </select>
+            </label>}
             {editable && <div className="create-row">
               <button className="secondary" onClick={() => setShowCreateEntry(true)}>
                 {t(lang, "createAndAdd")}
@@ -1161,6 +1178,13 @@ export function Lists({
               lang={lang}
               context={{ listId: active.id }}
               readOnly={!editable}
+              onAdd={!editable && targetList ? async cid => {
+                setAdding(true);
+                try { await mutate(api.addEntry(targetList.id, cid, active.id)); }
+                finally { setAdding(false); }
+              } : undefined}
+              addedIds={targetList?.entries}
+              adding={adding}
               entries={active.entries}
               candidates={candidates}
               onReorder={(cid, to) => mutate(api.reorder(active.id, cid, to))}
