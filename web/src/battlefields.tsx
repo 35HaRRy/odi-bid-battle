@@ -288,6 +288,7 @@ export function BattlefieldPreparation({
   const draftFileInputRef = useRef<HTMLInputElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const draftRequest = useRef(0);
   const [detailH, setDetailH] = useState<number | null>(null);
 
   // Keep the left card list exactly as tall as the right detail column,
@@ -316,20 +317,25 @@ export function BattlefieldPreparation({
     };
   }, [battlefields.length, draft?.battlefieldId]);
 
-  const loadDraft = async (battlefieldId: string | null) => {
-    if (!battlefieldId) {
-      setDraft(null);
-      return;
-    }
-    try {
-      const d = await api.getDraftBattlefield(auction.id);
-      setDraft(d);
-      setGeoDraft(d.geography);
-      setHistDraft(d.history);
-    } catch {
-      // Fall back to the shared record for archived selections.
-      const single = await api.getBattlefield(battlefieldId).catch(() => null);
-      if (single) {
+  useEffect(() => {
+    const request = ++draftRequest.current;
+    const current = () => request === draftRequest.current;
+    const battlefieldId = auction.battlefieldId;
+    setDraft(null);
+    setEditingTexts(false);
+    (async () => {
+      if (!battlefieldId) return;
+      try {
+        const d = await api.getDraftBattlefield(auction.id);
+        if (!current() || d.auctionId !== auction.id || d.battlefieldId !== battlefieldId) return;
+        setDraft(d);
+        setGeoDraft(d.geography);
+        setHistDraft(d.history);
+      } catch {
+        if (!current()) return;
+        // Fall back to the shared record for archived selections.
+        const single = await api.getBattlefield(battlefieldId).catch(() => null);
+        if (!current() || !single) return;
         setDraft({
           auctionId: auction.id,
           battlefieldId: single.id,
@@ -341,11 +347,10 @@ export function BattlefieldPreparation({
         });
         setGeoDraft(single.geography);
         setHistDraft(single.history);
-      } else {
-        setDraft(null);
       }
-    }
-  };
+    })();
+    return () => { draftRequest.current++; };
+  }, [auction.id, auction.battlefieldId]);
 
   useEffect(() => {
     let live = true;
@@ -354,7 +359,6 @@ export function BattlefieldPreparation({
         const list = await api.battlefields(includePublic);
         if (!live) return;
         setBattlefields(list);
-        await loadDraft(auction.battlefieldId);
       } catch {
         if (live) setError(t(lang, "persistFail"));
       }
@@ -362,8 +366,7 @@ export function BattlefieldPreparation({
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auction.id, auction.battlefieldId, includePublic]);
+  }, [includePublic, lang]);
 
   useEffect(() => {
     let live = true;
@@ -388,11 +391,12 @@ export function BattlefieldPreparation({
     setError(null);
     try {
       const updated = await api.setAuctionBattlefield(auction.id, id);
+      draftRequest.current++;
+      setDraft(null);
       onAuctionChange(updated);
       setEditingTexts(false);
       setTextError(null);
       // Selection change discards previous draft overrides server-side.
-      await loadDraft(updated.battlefieldId);
       setDraftRev((r) => r + 1);
     } catch {
       setError(t(lang, "persistFail"));

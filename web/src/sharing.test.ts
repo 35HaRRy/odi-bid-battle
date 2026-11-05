@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createElement, Children, isValidElement, type ReactNode, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { PublicFilter, ShareField, canEdit } from "./sharing";
-import { api, setSessionCsrf, type Candidate, type CandidateList } from "./api";
+import { api, setSessionCsrf, type Auction, type Candidate, type CandidateList, type DraftBattlefield } from "./api";
 import { Catalog, CatalogPane, Lists, AuctionWorkspace } from "./App";
 import { BattlefieldLibrary, BattlefieldPreparation, BattlefieldEditor } from "./battlefields";
 import { t } from "./i18n";
@@ -203,6 +203,54 @@ it("retains a revoked battlefield through the owned auction context and isolates
   const retained = renderToStaticMarkup(first());
   expect(retained).not.toContain(foreign.name);
   expect(retained).toContain("Historical field");
+});
+
+it("battlefield public filter preserves unsaved geography and history without reloading context", async () => {
+  const auction: Auction = { id: "auction", name: "Own", sourceListId: null, followsSource: false, entries: [], battlefieldId: "field-a", simulationPromptTemplate: "", status: "draft" };
+  vi.spyOn(api, "battlefields").mockResolvedValue([]);
+  const context = vi.spyOn(api, "getDraftBattlefield").mockResolvedValue({ auctionId: auction.id, battlefieldId: "field-a", name: "Field A", geography: "Saved geography", history: "Saved history", hasCustomImage: false, archivedAt: null });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { headers: { "content-type": "image/svg+xml" } })));
+  const render = mount(() => BattlefieldPreparation({ lang: "en", userId: "alice", auction, onAuctionChange: update }));
+  render(); await settle();
+  click(elements(render()).find(el => el.props["aria-label"] === t("en", "editTexts"))!);
+  for (const [label, value] of [["geographyFeatures", "Unsaved geography"], ["historyPast", "Unsaved history"]]) {
+    const input = elements(render()).find(el => el.type === "textarea" && el.props["aria-label"] === t("en", label))!;
+    (input.props.onChange as (event: unknown) => void)({ target: { value } });
+  }
+  toggle(render(), true); render(); await settle();
+  const inputs = elements(render()).filter(el => el.type === "textarea");
+  expect(inputs.map(input => input.props.value)).toEqual(["Unsaved geography", "Unsaved history"]);
+  expect(context).toHaveBeenCalledTimes(1);
+});
+
+it.each(["context", "fallback"] as const)("ignores a delayed A %s response after selecting B, including editable/save state", async source => {
+  let auction: Auction = { id: "auction", name: "Own", sourceListId: null, followsSource: false, entries: [], battlefieldId: "field-a", simulationPromptTemplate: "", status: "draft" };
+  const a: DraftBattlefield = { auctionId: auction.id, battlefieldId: "field-a", name: "Field A", geography: "A geography", history: "A history", hasCustomImage: false, archivedAt: null };
+  const b: DraftBattlefield = { ...a, battlefieldId: "field-b", name: "Field B", geography: "B geography", history: "B history" };
+  let finishA!: (value: DraftBattlefield) => void;
+  const delayedA = new Promise<DraftBattlefield>(resolve => { finishA = resolve; });
+  vi.spyOn(api, "battlefields").mockResolvedValue([a, b].map(field => ({ ...owner, id: field.battlefieldId, name: field.name, geography: field.geography, history: field.history, archivedAt: null })));
+  vi.spyOn(api, "getDraftBattlefield").mockResolvedValue(b)
+    .mockImplementationOnce(() => source === "context" ? delayedA : Promise.reject(new Error("synthetic contextual failure")));
+  vi.spyOn(api, "getBattlefield").mockImplementation(async () => {
+    const field = await delayedA;
+    return { ...owner, id: field.battlefieldId, name: field.name, geography: field.geography, history: field.history, archivedAt: null };
+  });
+  vi.spyOn(api, "setAuctionBattlefield").mockResolvedValue({ ...auction, battlefieldId: b.battlefieldId });
+  const save = vi.spyOn(api, "saveDraftBattlefield").mockResolvedValue(b);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { headers: { "content-type": "image/svg+xml" } })));
+  const render = mount(() => BattlefieldPreparation({ lang: "en", userId: "alice", auction, onAuctionChange: updated => { auction = updated; } }));
+  render(); await settle();
+  const selectB = elements(render()).find(el => el.type === "button" && el.props.className === "battle-option" && elements(el.props.children as ReactNode).some(child => child.type === "strong" && child.props.children === b.name))!;
+  await (selectB.props.onClick as () => Promise<void>)();
+  render(); await settle();
+  finishA(a); await settle();
+  const detail = elements(render()).find(el => el.props.className === "map-embed")!;
+  expect(detail.props.alt).toBe("Field B");
+  click(elements(render()).find(el => el.props["aria-label"] === t("en", "editTexts"))!);
+  expect(elements(render()).filter(el => el.type === "textarea").map(el => el.props.value)).toEqual(["B geography", "B history"]);
+  await (button(render(), t("en", "save")).props.onClick as () => Promise<void>)();
+  expect(save).toHaveBeenCalledWith(auction.id, { geography: "B geography", history: "B history" }, null);
 });
 
 it("candidate root create and edit forward sharing while closing creation resets to private", async () => {
