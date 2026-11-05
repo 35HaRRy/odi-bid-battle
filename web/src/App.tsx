@@ -1860,11 +1860,19 @@ export default function App() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
 
   useEffect(() => {
+    const syncLanguage = () => setL(getLang());
+    window.addEventListener("obb-language", syncLanguage);
+    return () => window.removeEventListener("obb-language", syncLanguage);
+  }, []);
+
+  useEffect(() => {
     document.documentElement.lang = lang;
+    let active = true;
     api
       .candidates()
-      .then(setCandidates)
-      .catch(() => setError(t(lang, "persistFail")));
+      .then(items => { if (active) setCandidates(items); })
+      .catch(() => { if (active) setError(t(lang, "persistFail")); });
+    return () => { active = false; };
   }, [lang]);
 
   useEffect(() => {

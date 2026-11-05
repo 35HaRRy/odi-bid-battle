@@ -47,5 +47,11 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
     // Platforms may reject the body before the app runs, returning HTML/text 413.
     throw new ApiError(res.status, res.status === 413 ? "payload too large" : text || `http ${res.status}`, null);
   }
+  const json = res.json.bind(res);
+  res.json = async () => {
+    const value: unknown = await json();
+    assertCurrent();
+    return value;
+  };
   return res;
 }
