@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { authApi, setSessionCsrf, subscribeUnauthorized, type AuthUser, type SessionView } from "./auth-api";
 import { ApiError } from "./api-transport";
 import { getLang, setLang, t, type Lang } from "./i18n";
+import { LandingPage } from "./landing";
 
 export type AccountMode = "login" | "register" | "forgot" | "reset" | "verify" | "link" | "reauth";
 const modes: AccountMode[] = ["login", "register", "forgot", "reset", "verify", "link", "reauth"];
@@ -227,8 +228,9 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
     window.history.pushState(null, "", url); setRoute(url);
   }
   const account = route.pathname.startsWith("/account");
+  const publicRoot = route.pathname === "/" && !route.searchParams.has("tab");
   const sensitive = mode === "reset" || mode === "verify";
-  const showWorkspace = !!state.view?.user && !state.busy && (!account || (!sensitive && mode !== "link" && mode !== "reauth"));
+  const showWorkspace = !publicRoot && !!state.view?.user && !state.busy && (!account || (!sensitive && mode !== "link" && mode !== "reauth"));
   useEffect(() => {
     if (!initialized || state.busy || state.view?.user || state.blocked) return;
     if (route.pathname !== "/app" && !(route.pathname === "/" && route.searchParams.has("tab"))) return;
@@ -251,7 +253,10 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
       {(state.view?.user || state.blocked) && <button type="button" disabled={state.busy} onClick={() => { setError(false); void owner.logout().catch(() => setError(true)); }}>{t(lang, "auth_logout")}</button>}
     </div>
     {error && <p className="account-error" role="alert">{t(lang, state.blocked ? "auth_logoutError" : "auth_serviceError")}</p>}
-    {!initialized || (state.busy && !!state.view?.user) ? <main className="account-shell" role="status">{t(lang, "auth_working")}</main> : state.blocked ? <main className="account-shell">{t(lang, "auth_logoutError")}</main> : showWorkspace ? <React.Fragment key={state.view!.user!.id}>{children(state.view!.user!)}</React.Fragment> : <>
+    {publicRoot ? <LandingPage lang={lang} onStart={() => {
+      const url = new URL(state.view?.user && !state.busy && !state.blocked ? "/app" : "/account", window.location.origin);
+      window.history.pushState(null, "", url); setRoute(url);
+    }} /> : !initialized || (state.busy && !!state.view?.user) ? <main className="account-shell" role="status">{t(lang, "auth_working")}</main> : state.blocked ? <main className="account-shell">{t(lang, "auth_logoutError")}</main> : showWorkspace ? <React.Fragment key={state.view!.user!.id}>{children(state.view!.user!)}</React.Fragment> : <>
       {!state.view && <button type="button" onClick={() => { setError(false); void owner.run(async () => ({ ...await authApi.session(), user: null })).catch(() => setError(true)); }}>{t(lang, "auth_retry")}</button>}
       <AccountScreen owner={owner} mode={!state.view?.user && (mode === "link" || mode === "reauth") ? "login" : mode} token={token} lang={lang} onMode={navigate} />
     </>}
