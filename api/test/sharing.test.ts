@@ -37,6 +37,32 @@ describe("opt-in sharing", () => {
     await a.close();
   });
 
+  it.each(["text/html", "image/svg+xml", "image/png"])("rejects executable candidate bytes on every upload path (%s)", async mime => {
+    const c = await candidate(b);
+    const list = await b.saveList("Target", false);
+    await b.addEntryToList(list.id, c.id);
+    const draft = await b.saveAuction("Draft", list.id);
+    for (const path of ["/candidates", `/candidates/${c.id}/edit`, `/lists/${list.id}/entries/${c.id}/edit`, `/auctions/${draft.id}/entries/${c.id}/edit`]) {
+      const form = new FormData();
+      form.append("name", "Unsafe");
+      form.append("image", new Blob(["<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>"], { type: mime }), "unsafe.svg");
+      expect((await request(path, { method: "POST", body: form })).status).toBe(400);
+    }
+  });
+
+  it("serves historical executable assets as inert bytes without modifying storage", async () => {
+    const c = await candidate(b);
+    const bytes = Buffer.from("<html><script>fetch('/auth/session')</script></html>");
+    await b.pool!.query("UPDATE candidates SET image=$2,image_mime='text/html' WHERE id=$1", [c.id, bytes]);
+    const response = await request(`/candidates/${c.id}/image`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/octet-stream");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("content-security-policy")).toContain("sandbox");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+    expect((await b.getCandidate(c.id)).image).toEqual(bytes);
+  });
+
   it("defaults to own roots and unions public roots without duplicates, with Visibility", async () => {
     const c = await candidate(a, "Public", true);
     const privateCandidate = await candidate(a);

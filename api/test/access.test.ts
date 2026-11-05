@@ -79,6 +79,40 @@ describe("domain ownership", () => {
       expect((await fetch(base + path, { method: "POST", headers: { Origin: origin, Cookie: cookie, "X-CSRF-Token": csrfToken } })).status).toBe(401);
     }
   });
+
+  it.each(["text/html", "image/svg+xml", "image/png"])("all binary families preserve legacy unsafe bytes but never serve executable content (%s)", async mime => {
+    const fixture = await seed(a);
+    const { candidates: [candidate], field, auction, teams: [team], upload } = fixture;
+    const member = team.members[0];
+    const bytes = Buffer.from("<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>");
+    await pool.query("UPDATE candidates SET image=$2,image_mime=$3 WHERE id=$1", [candidate.id, bytes, mime]);
+    await pool.query("UPDATE battlefields SET image=$2,image_mime=$3 WHERE id=$1", [field.id, bytes, mime]);
+    await pool.query("UPDATE auctions SET battlefield_image=$2,battlefield_image_mime=$3,battlefield_image_name='legacy',background_image=$2,background_mime=$3,background_name='legacy' WHERE id=$1", [auction.id, bytes, mime]);
+    await pool.query("UPDATE auction_team_image_uploads SET image=$2,image_mime=$3 WHERE id=$1", [upload.id, bytes, mime]);
+    await pool.query("UPDATE auction_teams SET flag_image=$2,flag_mime=$3 WHERE id=$1", [team.id, bytes, mime]);
+    await pool.query("UPDATE auction_team_members SET avatar_image=$2,avatar_mime=$3 WHERE id=$1", [member.id, bytes, mime]);
+    const paths = [`/candidates/${candidate.id}/image`, `/battlefields/${field.id}/image`, `/auctions/${auction.id}/battlefield/image`, `/auctions/${auction.id}/background`, `/auctions/${auction.id}/team-images/${upload.id}/image`, `/auctions/${auction.id}/teams/${team.id}/flag`, `/auctions/${auction.id}/teams/${team.id}/members/${member.id}/avatar`];
+    for (const path of paths) {
+      const response = await alice(path);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("content-type"), path).toBe("application/octet-stream");
+      expect(response.headers.get("x-content-type-options"), path).toBe("nosniff");
+      expect(response.headers.get("content-security-policy"), path).toBe("sandbox; default-src 'none'");
+      expect(response.headers.get("content-disposition"), path).toBe("attachment");
+      expect(response.headers.get("cache-control"), path).toBe("no-store");
+      expect(Buffer.from(await response.arrayBuffer()), path).toEqual(bytes);
+      const head = await alice(path, { method: "HEAD" });
+      expect(head.headers.get("content-type"), path).toBe("application/octet-stream");
+      expect(head.headers.get("content-security-policy"), path).toContain("sandbox");
+    }
+    expect((await a.getCandidate(candidate.id)).image).toEqual(bytes);
+    expect((await a.battlefields.get(field.id)).image.buffer).toEqual(bytes);
+    expect((await a.battlefields.getDraftBattlefieldImage(auction.id)).buffer).toEqual(bytes);
+    expect((await a.battlefields.getBackground(auction.id))!.buffer).toEqual(bytes);
+    expect((await a.teams.getTeamImageUpload(upload.id)).buffer).toEqual(bytes);
+    expect((await a.teams.getTeamFlagImage(team.id)).buffer).toEqual(bytes);
+    expect((await a.teams.getMemberAvatarImage(member.id))!.buffer).toEqual(bytes);
+  });
   it("fails closed without a scope and keeps scopes independent", async () => {
     await expect(root.listAuctions()).rejects.toThrow();
     const own = await a.saveAuction("Alice", null);

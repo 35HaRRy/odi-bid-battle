@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
-import { AssetError } from "./battlefield-domain.js";
+import { AssetError, validateAssetImage } from "./battlefield-domain.js";
 import { BattlefieldStore } from "./battlefield-store.js";
 import { isLiveError, LiveStore } from "./live-store.js";
 import { TeamStore } from "./team-store.js";
@@ -88,7 +88,7 @@ function cleanCandidateName(name: string): string {
 }
 
 function assertValidImage(image: CandidateImageInput | null): void {
-  if (image && image.buffer.length === 0) throw new Error("invalid image");
+  if (image) validateAssetImage(image);
 }
 
 function resolvedImage(
@@ -272,7 +272,7 @@ export class PgStore {
   ): Promise<CandidateRecord> {
     const clean = name.trim();
     if (!clean || clean.length > 200) throw new Error("invalid name");
-    if (image.length === 0) throw new Error("invalid image");
+    validateAssetImage({ buffer: image, mime: imageMime, name: imageName });
     const id = randomUUID();
     try {
       await this.q.query(
@@ -418,9 +418,6 @@ export class PgStore {
   }
 
   async cloneList(sourceId: string): Promise<CandidateListRecord> {
-    const source = await this.getList(sourceId);
-    if (source.archivedAt) throw new Error("list not found");
-    const name = buildListCopyName(source.name);
     const id = randomUUID();
     const pool = this.pool;
     if (!pool || typeof (pool as Pool).connect !== "function") {
@@ -435,7 +432,7 @@ export class PgStore {
       const snapshot = await new PgStore(client, this.userId).getList(sourceId);
       await client.query(
         "INSERT INTO candidate_lists (id, name, is_draft, owner_user_id) VALUES ($1,$2,$3,$4)",
-        [id, name, source.isDraft, this.userId],
+        [id, buildListCopyName(snapshot.name), snapshot.isDraft, this.userId],
       );
       for (let i = 0; i < snapshot.entries.length; i++) {
         await this.lockCandidate(client, snapshot.entries[i], { listId: sourceId });
@@ -595,6 +592,7 @@ export class PgStore {
     try {
       await client.query("BEGIN");
       await this.lockDraft(client, auctionId);
+      await this.lockAuctionSource(client, auctionId);
       const transactionStore = new PgStore(client).forUser(this.userId);
       const cur = await transactionStore.getAuction(auctionId);
       if (!cur.entries.includes(oldCandidateId))
@@ -639,10 +637,6 @@ export class PgStore {
   }
 
   async addEntryToList(listId: string, candidateId: string, sourceListId?: string): Promise<void> {
-    const current = await this.getList(listId);
-    if (!current.isOwner) throw new AccessError();
-    if (current.entries.includes(candidateId))
-      throw new Error("duplicate entry");
     const pool = this.pool;
     if (!pool || typeof (pool as Pool).connect !== "function") {
       throw pgError("failed to add entry", new Error("no pool"));
@@ -651,7 +645,16 @@ export class PgStore {
     try {
       client = await (pool as Pool).connect();
       await client.query("BEGIN");
-      await this.lockList(client, listId);
+      // Cross-list selections acquire both parents in ID order, not target-first.
+      for (const id of [...new Set([listId, ...(sourceListId ? [sourceListId] : [])])].sort()) {
+        if (id === listId) await this.lockList(client, id);
+        else {
+          const source = await client.query("SELECT id FROM candidate_lists WHERE id=$1 AND is_public AND archived_at IS NULL FOR SHARE", [id]);
+          if (!source.rows[0]) throw new AccessError();
+        }
+      }
+      const current = await new PgStore(client, this.userId).getList(listId);
+      if (current.entries.includes(candidateId)) throw new Error("duplicate entry");
       await this.lockSelection(client, candidateId, sourceListId);
       const r = await client.query(
         "SELECT COALESCE(MAX(position),-1)+1 AS pos FROM list_entries WHERE list_id=$1",
@@ -674,15 +677,22 @@ export class PgStore {
   }
 
   async removeEntryFromList(listId: string, candidateId: string): Promise<void> {
-    if (!(await this.getList(listId)).isOwner) throw new AccessError();
+    const client = await this.pool!.connect();
     try {
-      await this.q.query(
+      await client.query("BEGIN");
+      await this.lockList(client, listId);
+      await client.query(
         "DELETE FROM list_entries WHERE list_id=$1 AND candidate_id=$2 AND EXISTS (SELECT 1 FROM candidate_lists WHERE id=list_id AND owner_user_id=$3)",
         [listId, candidateId, this.userId],
       );
-      await this.normalizePositions(listId);
+      const current = await new PgStore(client, this.userId).getList(listId);
+      await this.writeListEntries(client, listId, current.entries);
+      await client.query("COMMIT");
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
       throw pgError("failed to remove entry", err);
+    } finally {
+      client.release();
     }
   }
 
@@ -691,13 +701,6 @@ export class PgStore {
     candidateId: string,
     toIndex: number,
   ): Promise<void> {
-    const current = await this.getList(listId);
-    const from = current.entries.indexOf(candidateId);
-    if (from === -1) throw new Error("entry not found");
-    const clamped = Math.max(0, Math.min(toIndex, current.entries.length - 1));
-    const next = [...current.entries];
-    next.splice(from, 1);
-    next.splice(clamped, 0, candidateId);
     const pool = this.pool;
     if (!pool || typeof (pool as Pool).connect !== "function") {
       throw pgError("failed to reorder entries", new Error("no pool"));
@@ -707,48 +710,31 @@ export class PgStore {
       client = await (pool as Pool).connect();
       await client.query("BEGIN");
       await this.lockList(client, listId);
-      await client.query("DELETE FROM list_entries WHERE list_id=$1", [listId]);
-      for (let i = 0; i < next.length; i++) {
-        await client.query(
-          "INSERT INTO list_entries (list_id, candidate_id, position) VALUES ($1,$2,$3)",
-          [listId, next[i], i],
-        );
-      }
+      const current = await new PgStore(client, this.userId).getList(listId);
+      const from = current.entries.indexOf(candidateId);
+      if (from === -1) throw new Error("entry not found");
+      const clamped = Math.max(0, Math.min(toIndex, current.entries.length - 1));
+      const next = [...current.entries];
+      next.splice(from, 1);
+      next.splice(clamped, 0, candidateId);
+      await this.writeListEntries(client, listId, next);
       await client.query("COMMIT");
     } catch (err) {
       await client?.query("ROLLBACK").catch(() => undefined);
+      if ((err as Error).message === "entry not found") throw err;
       throw pgError("failed to reorder entries", err);
     } finally {
       client?.release();
     }
   }
 
-  private async normalizePositions(listId: string): Promise<void> {
-    const e = await this.q.query(
-      "SELECT candidate_id FROM list_entries WHERE list_id=$1 AND EXISTS (SELECT 1 FROM candidate_lists WHERE id=list_id AND owner_user_id=$2) ORDER BY position",
-      [listId, this.userId],
-    );
-    const ids = (e.rows as unknown as { candidate_id: string }[]).map(
-      (r) => r.candidate_id,
-    );
-    const pool = this.pool;
-    if (!pool || typeof (pool as Pool).connect !== "function") return;
-    const client = await (pool as Pool).connect();
-    try {
-      await client.query("BEGIN");
-      await this.lockList(client, listId);
-      await client.query("DELETE FROM list_entries WHERE list_id=$1", [listId]);
-      for (let i = 0; i < ids.length; i++) {
-        await client.query(
-          "INSERT INTO list_entries (list_id, candidate_id, position) VALUES ($1,$2,$3)",
-          [listId, ids[i], i],
-        );
-      }
-      await client.query("COMMIT");
-    } catch {
-      await client.query("ROLLBACK").catch(() => undefined);
-    } finally {
-      client.release();
+  private async writeListEntries(client: PoolClient, listId: string, ids: string[]): Promise<void> {
+    await client.query("DELETE FROM list_entries WHERE list_id=$1", [listId]);
+    for (let i = 0; i < ids.length; i++) {
+      await client.query(
+        "INSERT INTO list_entries (list_id, candidate_id, position) VALUES ($1,$2,$3)",
+        [listId, ids[i], i],
+      );
     }
   }
 
@@ -828,6 +814,7 @@ export class PgStore {
       } | undefined;
       if (!source) throw new Error("auction not found");
 
+      await this.lockAuctionSource(client, sourceId);
       const entriesResult = source.follows_source && source.source_list_id
         ? await client.query(
             "SELECT candidate_id FROM list_entries WHERE list_id=$1 AND EXISTS (SELECT 1 FROM candidate_lists WHERE id=list_id AND owner_user_id=$2) ORDER BY position",
@@ -998,13 +985,6 @@ export class PgStore {
     }
   }
 
-  private async requireDraft(auctionId: string): Promise<void> {
-    const r = await this.q.query("SELECT status FROM auctions WHERE id=$1 AND owner_user_id=$2", [auctionId, this.userId]);
-    const row = r.rows[0] as unknown as { status: string } | undefined;
-    if (!row) throw new AccessError();
-    if (row.status !== "draft") throw new AssetError("preparation locked");
-  }
-
   private async lockDraft(client: PoolClient, auctionId: string): Promise<void> {
     const result = await client.query<{ status: string }>(
       "SELECT status FROM auctions WHERE id=$1 AND owner_user_id=$2 FOR UPDATE",
@@ -1014,54 +994,20 @@ export class PgStore {
     if (result.rows[0].status !== "draft") throw new AssetError("preparation locked");
   }
 
-  private async ensureForked(auctionId: string): Promise<void> {
-    const r = await this.q.query(
-      "SELECT follows_source, source_list_id, status FROM auctions WHERE id=$1 AND owner_user_id=$2",
-      [auctionId, this.userId],
-    );
-    const row = r.rows[0] as unknown as
-      | { follows_source: boolean; source_list_id: string | null; status: string }
-      | undefined;
-    if (!row) throw new AccessError();
-    if (row.status !== "draft") throw new AssetError("preparation locked");
-    if (!row.follows_source) return;
-    if (!row.source_list_id) return;
-    const src = await this.getList(row.source_list_id);
-    await this.writeAuctionEntries(auctionId, src.entries);
-    await this.q.query(
-      "UPDATE auctions SET follows_source=false, updated_at=now() WHERE id=$1 AND owner_user_id=$2",
-      [auctionId, this.userId],
-    );
-  }
-
-  private async writeAuctionEntries(
+  private async withDraft(
     auctionId: string,
-    entries: string[],
-    sourceListId?: string,
-  ): Promise<void> {
-    const pool = this.pool;
-    if (!pool || typeof (pool as Pool).connect !== "function") {
-      throw pgError("failed to write auction entries", new Error("no pool"));
-    }
-    const client = await (pool as Pool).connect();
+    operation: (client: PoolClient, current: AuctionRecord) => Promise<void>,
+  ): Promise<AuctionRecord> {
+    const client = await this.pool!.connect();
     try {
       await client.query("BEGIN");
       await this.lockDraft(client, auctionId);
-      const existing = await new PgStore(client, this.userId).getAuction(auctionId);
-      for (const id of entries) {
-        if (existing.entries.includes(id)) await this.lockCandidate(client, id, { auctionId });
-        else await this.lockSelection(client, id, sourceListId);
-      }
-      await client.query("DELETE FROM auction_entries WHERE auction_id=$1", [
-        auctionId,
-      ]);
-      for (let i = 0; i < entries.length; i++) {
-        await client.query(
-          "INSERT INTO auction_entries (auction_id, candidate_id, position) VALUES ($1,$2,$3)",
-          [auctionId, entries[i], i],
-        );
-      }
+      await this.lockAuctionSource(client, auctionId);
+      const tx = new PgStore(client, this.userId);
+      await operation(client, await tx.getAuction(auctionId));
+      const result = await tx.getAuction(auctionId);
       await client.query("COMMIT");
+      return result;
     } catch (err) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw err;
@@ -1070,16 +1016,32 @@ export class PgStore {
     }
   }
 
+  private async lockAuctionSource(client: PoolClient, auctionId: string): Promise<void> {
+    await client.query(
+      "SELECT id FROM candidate_lists WHERE id=(SELECT source_list_id FROM auctions WHERE id=$1 AND follows_source) AND owner_user_id=$2 FOR SHARE",
+      [auctionId, this.userId],
+    );
+  }
+
+  private async writeAuctionEntries(client: PoolClient, auctionId: string, entries: string[]): Promise<void> {
+    for (const id of entries) await this.lockCandidate(client, id, { auctionId });
+    await client.query("DELETE FROM auction_entries WHERE auction_id=$1", [auctionId]);
+    for (let i = 0; i < entries.length; i++) {
+      await client.query("INSERT INTO auction_entries (auction_id, candidate_id, position) VALUES ($1,$2,$3)", [auctionId, entries[i], i]);
+    }
+    await client.query("UPDATE auctions SET follows_source=false, updated_at=now() WHERE id=$1 AND owner_user_id=$2", [auctionId, this.userId]);
+  }
+
   async renameAuction(id: string, name: string): Promise<AuctionRecord> {
     if (name.length > 200) throw new Error("invalid name");
     try {
-      await this.requireDraft(id);
-      await this.ensureForked(id);
-      await this.q.query(
-        "UPDATE auctions SET name=$2, updated_at=now() WHERE id=$1 AND owner_user_id=$3",
-        [id, name, this.userId],
-      );
-      return await this.getAuction(id);
+      return await this.withDraft(id, async (client, current) => {
+        if (current.followsSource) await this.writeAuctionEntries(client, id, current.entries);
+        await client.query(
+          "UPDATE auctions SET name=$2, updated_at=now() WHERE id=$1 AND owner_user_id=$3 AND status='draft'",
+          [id, name, this.userId],
+        );
+      });
     } catch (err) {
       if ((err as Error).message === "auction not found") throw err;
       if (err instanceof AssetError) throw err;
@@ -1091,12 +1053,12 @@ export class PgStore {
   async setSimulationPromptTemplate(id: string, template: string): Promise<AuctionRecord> {
     const clean = cleanSimulationPromptTemplate(template);
     try {
-      await this.requireDraft(id);
-      await this.q.query(
-        "UPDATE auctions SET simulation_prompt_template=$2, updated_at=now() WHERE id=$1 AND owner_user_id=$3",
-        [id, clean, this.userId],
-      );
-      return await this.getAuction(id);
+      return await this.withDraft(id, async client => {
+        await client.query(
+          "UPDATE auctions SET simulation_prompt_template=$2, updated_at=now() WHERE id=$1 AND owner_user_id=$3 AND status='draft'",
+          [id, clean, this.userId],
+        );
+      });
     } catch (err) {
       if ((err as Error).message === "auction not found") throw err;
       if ((err as Error).message === "invalid simulation prompt template") throw err;
@@ -1141,17 +1103,12 @@ export class PgStore {
     sourceListId?: string,
   ): Promise<AuctionRecord> {
     try {
-      await this.requireDraft(auctionId);
-      await this.ensureForked(auctionId);
-      const cur = await this.getAuction(auctionId);
-      if (cur.entries.includes(candidateId))
-        throw new Error("duplicate entry");
-      await this.writeAuctionEntries(auctionId, [...cur.entries, candidateId], sourceListId);
-      await this.q.query(
-        "UPDATE auctions SET updated_at=now() WHERE id=$1 AND owner_user_id=$2",
-        [auctionId, this.userId],
-      );
-      return await this.getAuction(auctionId);
+      return await this.withDraft(auctionId, async (client, current) => {
+        if (current.entries.includes(candidateId)) throw new Error("duplicate entry");
+        await this.lockSelection(client, candidateId, sourceListId);
+        await this.writeAuctionEntries(client, auctionId, current.entries);
+        await client.query("INSERT INTO auction_entries (auction_id,candidate_id,position) VALUES ($1,$2,$3)", [auctionId, candidateId, current.entries.length]);
+      });
     } catch (err) {
       if (
         (err as Error).message === "auction not found" ||
@@ -1169,18 +1126,9 @@ export class PgStore {
     candidateId: string,
   ): Promise<AuctionRecord> {
     try {
-      await this.requireDraft(auctionId);
-      await this.ensureForked(auctionId);
-      const cur = await this.getAuction(auctionId);
-      await this.writeAuctionEntries(
-        auctionId,
-        cur.entries.filter((e) => e !== candidateId),
-      );
-      await this.q.query(
-        "UPDATE auctions SET updated_at=now() WHERE id=$1 AND owner_user_id=$2",
-        [auctionId, this.userId],
-      );
-      return await this.getAuction(auctionId);
+      return await this.withDraft(auctionId, async (client, current) => {
+        await this.writeAuctionEntries(client, auctionId, current.entries.filter(id => id !== candidateId));
+      });
     } catch (err) {
       if (err instanceof AssetError) throw err;
       if (err instanceof PersistenceError) throw err;
@@ -1194,21 +1142,14 @@ export class PgStore {
     toIndex: number,
   ): Promise<AuctionRecord> {
     try {
-      await this.requireDraft(auctionId);
-      await this.ensureForked(auctionId);
-      const cur = await this.getAuction(auctionId);
-      const from = cur.entries.indexOf(candidateId);
-      if (from === -1) throw new Error("entry not found");
-      const clamped = Math.max(0, Math.min(toIndex, cur.entries.length - 1));
-      const next = [...cur.entries];
-      next.splice(from, 1);
-      next.splice(clamped, 0, candidateId);
-      await this.writeAuctionEntries(auctionId, next);
-      await this.q.query(
-        "UPDATE auctions SET updated_at=now() WHERE id=$1 AND owner_user_id=$2",
-        [auctionId, this.userId],
-      );
-      return await this.getAuction(auctionId);
+      return await this.withDraft(auctionId, async (client, current) => {
+        const from = current.entries.indexOf(candidateId);
+        if (from === -1) throw new Error("entry not found");
+        const next = [...current.entries];
+        next.splice(from, 1);
+        next.splice(Math.max(0, Math.min(toIndex, current.entries.length - 1)), 0, candidateId);
+        await this.writeAuctionEntries(client, auctionId, next);
+      });
     } catch (err) {
       if ((err as Error).message === "entry not found") throw err;
       if (err instanceof AssetError) throw err;
@@ -1242,11 +1183,13 @@ export class PgStore {
         | undefined;
       if (!row) throw new Error("auction not found");
       if (row.status === "ongoing") {
+        const result = await new PgStore(client, this.userId).getAuction(auctionId);
         await client.query("COMMIT");
-        return await this.getAuction(auctionId);
+        return result;
       }
       if (row.status !== "draft") throw new AssetError("preparation locked");
 
+      await this.lockAuctionSource(client, auctionId);
       let entries: string[];
       if (row.follows_source && row.source_list_id) {
         const e = await client.query(
@@ -1431,7 +1374,7 @@ export class PgStore {
         );
       }
       await client.query("COMMIT");
-      return await this.getAuction(auctionId);
+      return await new PgStore(client, this.userId).getAuction(auctionId);
     } catch (err) {
       await client.query("ROLLBACK").catch(() => undefined);
       if (

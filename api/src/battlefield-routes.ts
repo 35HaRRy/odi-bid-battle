@@ -1,4 +1,5 @@
 import express from "express";
+import { sendAsset } from "./asset-response.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,10 +140,7 @@ export function mountBattlefieldRoutes(app: express.Express): void {
   app.get("/battlefields/:id/image", async (req, res) => {
     try {
       const rec = await requestStore(res).battlefields.get(req.params.id);
-      res.setHeader("Content-Type", rec.image.mime || "image/png");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(rec.image.buffer);
+      sendAsset(res, rec.image);
     } catch (e) {
       if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
@@ -259,10 +257,7 @@ export function mountBattlefieldRoutes(app: express.Express): void {
   app.get("/auctions/:id/battlefield/image", async (req, res) => {
     try {
       const image = await requestStore(res).battlefields.getDraftBattlefieldImage(req.params.id);
-      res.setHeader("Content-Type", image.mime || "image/png");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(image.buffer);
+      sendAsset(res, image);
     } catch (e) {
       if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
@@ -319,16 +314,10 @@ export function mountBattlefieldRoutes(app: express.Express): void {
     try {
       const bg = await requestStore(res).battlefields.getBackground(req.params.id);
       if (bg) {
-        res.setHeader("Content-Type", bg.mime);
-        res.setHeader("X-Content-Type-Options", "nosniff");
-        res.setHeader("Cache-Control", "no-store");
-        return res.send(bg.buffer);
+        return sendAsset(res, bg);
       }
       const def = loadDefaultBackground();
-      res.setHeader("Content-Type", def.mime);
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(def.buffer);
+      sendAsset(res, def, true);
     } catch (e) {
       if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);

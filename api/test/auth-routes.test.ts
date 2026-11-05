@@ -60,6 +60,32 @@ describe("account HTTP security", () => {
   const token = (purpose: string) => new URL([...delivered].reverse().find(m => m.purpose === purpose)!.url).hash.slice(1).split("=")[1];
   const credentials = { username: "tester", email: "tester@example.test", password: "fixture-password" };
 
+  it.each([false, true])("two tabs sharing cookies retain independent usable CSRF views (authenticated=%s)", async authenticated => {
+    const first = await client();
+    if (authenticated) {
+      await createVerifiedUser(pool, "tester");
+      expect((await first.request("/auth/login", { login: "tester", password: credentials.password })).status).toBe(200);
+    }
+    // One browser cookie jar; each tab retains its own in-memory response token.
+    const tabOneToken = first.csrf();
+    const second = await first.request("/auth/session");
+    const tabTwoToken = (await second.json()).csrfToken;
+    const path = authenticated ? "/auth/reauthenticate" : "/auth/resend-verification";
+    const body = authenticated ? { password: credentials.password } : { email: credentials.email };
+    for (const csrf of [tabOneToken, tabTwoToken]) {
+      expect((await first.request(path, body, { "X-CSRF-Token": csrf })).status).toBe(authenticated ? 204 : 202);
+    }
+    if (authenticated) {
+      const stored = (await pool.query("SELECT csrf_hash FROM auth_sessions")).rows[0].csrf_hash;
+      expect(stored).toBe(hashToken(tabOneToken));
+      expect(stored).not.toBe(tabOneToken);
+      expect((await first.request("/auth/logout", {}, { "X-CSRF-Token": tabOneToken })).status).toBe(204);
+      await first.request("/auth/session");
+      expect(first.csrf()).not.toBe(tabOneToken);
+      expect((await first.request("/auth/resend-verification", { email: credentials.email }, { "X-CSRF-Token": tabTwoToken })).status).toBe(403);
+    }
+  });
+
   it("requires anonymous CSRF and exact Origin on every unsafe route", async () => {
     const c = await client();
     for (const path of ["/auth/register", "/auth/login", "/auth/logout", "/auth/reset-password", "/candidates", "/unknown"]) {

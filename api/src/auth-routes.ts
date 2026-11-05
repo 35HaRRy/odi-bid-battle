@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response, NextFunction } from "express";
 import { AuthStore, AUTH_RATE_LIMITS, authRateLimitKey, isAccountEmail, type AuthUser } from "./auth-store.js";
-import { hashToken, newToken, validPassword } from "./auth-crypto.js";
+import { csrfForCookie, hashToken, newToken, validPassword } from "./auth-crypto.js";
 import type { AuthConfig } from "./auth-config.js";
 import { accountMailUrl, type AccountMailer } from "./auth-mail.js";
 
@@ -47,8 +47,8 @@ export function mountAuthSecurity(app: Express, auth: AuthStore, config: AuthCon
       if (res.locals.user) {
         if (!await auth.verifySessionCsrf(token, csrf)) return error(res, 403, "Forbidden");
       } else {
-        const digest = cookie(req, names(config).anonymous);
-        if (!/^[a-f0-9]{64}$/.test(digest) || !timingSafeEqual(Buffer.from(digest, "hex"), Buffer.from(hashToken(csrf), "hex"))) return error(res, 403, "Forbidden");
+        const secret = cookie(req, names(config).anonymous);
+        if (!/^[A-Za-z0-9_-]{43}$/.test(secret) || !timingSafeEqual(Buffer.from(hashToken(csrfForCookie(secret, "anonymous")), "hex"), Buffer.from(hashToken(csrf), "hex"))) return error(res, 403, "Forbidden");
       }
     }
     next();
@@ -67,12 +67,16 @@ export function mountAuthRoutes(app: Express, auth: AuthStore, config: AuthConfi
   }
   app.get("/auth/session", asyncRoute(async (req, res) => {
     if ((req.get("Origin") && req.get("Origin") !== config.allowedOrigin) || req.get("Sec-Fetch-Site") === "cross-site") return error(res,403,"Forbidden");
-    const csrfToken = res.locals.user ? await auth.rotateSessionCsrf(res.locals.sessionToken) : newToken();
+    let csrfToken: string;
+    if (res.locals.user) csrfToken = await auth.sessionCsrf(res.locals.sessionToken);
     if (!res.locals.user) {
+      const existing = cookie(req, cookies.anonymous);
+      const secret = /^[A-Za-z0-9_-]{43}$/.test(existing) ? existing : newToken();
+      csrfToken = csrfForCookie(secret, "anonymous");
       res.cookie(cookies.session,"",options(config,0));
-      res.cookie(cookies.anonymous,hashToken(csrfToken),options(config,3600000));
+      if (secret !== existing) res.cookie(cookies.anonymous,secret,options(config,3600000));
     }
-    return res.json({ user: res.locals.user, csrfToken, ...capabilities } satisfies SessionView);
+    return res.json({ user: res.locals.user, csrfToken: csrfToken!, ...capabilities } satisfies SessionView);
   }));
   app.post("/auth/login", asyncRoute(async (req, res) => {
     const login = typeof req.body?.login === "string" ? req.body.login : "";

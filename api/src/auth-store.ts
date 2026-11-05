@@ -1,6 +1,6 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { hashPassword, hashToken, newToken, verifyPassword } from "./auth-crypto.js";
+import { csrfForCookie, hashPassword, hashToken, newToken, verifyPassword } from "./auth-crypto.js";
 
 export interface AuthUser { id: string; username: string; email: string }
 export type TokenPurpose = "verify_email" | "reset_password";
@@ -176,8 +176,8 @@ export class AuthStore {
     return { user: userView(row), ...session };
   }
 
-  async rotateSessionCsrf(token: string): Promise<string> {
-    const csrfToken = newToken();
+  async sessionCsrf(token: string): Promise<string> {
+    const csrfToken = csrfForCookie(token, "session");
     await this.pool.query("UPDATE auth_sessions SET csrf_hash=$2 WHERE token_hash=$1 AND expires_at>now()", [hashToken(token),hashToken(csrfToken)]);
     return csrfToken;
   }
@@ -192,7 +192,7 @@ export class AuthStore {
 
   private async insertSession(client: PoolClient, userId: string) {
     const token = newToken();
-    const csrfToken = newToken();
+    const csrfToken = csrfForCookie(token, "session");
     const result = await client.query(`INSERT INTO auth_sessions (id,user_id,token_hash,csrf_hash,expires_at)
       VALUES ($2,$1,$3,$4,clock_timestamp()+interval '7 days') RETURNING expires_at`,
     [userId, randomUUID(), hashToken(token), hashToken(csrfToken)]);

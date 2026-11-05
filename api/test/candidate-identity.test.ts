@@ -9,7 +9,7 @@ const DATABASE_URL =
 async function saveSample(store: PgStore, name: string, byte: number) {
   return store.saveCandidate(
     name,
-    Buffer.from([byte, byte + 1]),
+    Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from([byte, byte + 1])]),
     "image/png",
     `${name}.png`,
   );
@@ -19,7 +19,7 @@ describe("candidate identity on edit", () => {
   it("preserves catalog sharing on referenced replacement but context edits stay private", async () => {
     const store = await ownedStore(DATABASE_URL);
     try {
-      const c = await store.saveCandidate("Shared", Buffer.from([1]), "image/png", "one.png", true);
+      const c = await store.saveCandidate("Shared", Buffer.from("89504e470d0a1a0a01", "hex"), "image/png", "one.png", true);
       const list = await store.saveList("References", false, true);
       await store.addEntryToList(list.id, c.id);
       const replacement = await store.editCatalogCandidate(c.id, "Shared replacement", null);
@@ -56,7 +56,7 @@ describe("candidate identity on edit", () => {
       expect(b.name).toBe("Katalog A v2");
       // image bytes copied when no new image supplied
       const bFull = await store.getCandidate(b.id);
-      expect(Buffer.from(bFull.image).length).toBe(2);
+      expect(bFull.image).toEqual(a.image);
       // original archived: hidden from catalog, still resolvable + list keeps original
       expect((await store.listCandidates()).map((x) => x.id)).not.toContain(a.id);
       expect((await store.getCandidate(a.id)).archivedAt).not.toBeNull();

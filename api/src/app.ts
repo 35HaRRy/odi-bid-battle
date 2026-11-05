@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { PgStore } from "./store.js";
 import { AssetError } from "./battlefield-domain.js";
+import { sendAsset } from "./asset-response.js";
 import { StartValidationError } from "./domain.js";
 import {
   REQUEST_BODY_BUDGET_BYTES,
@@ -145,9 +146,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   app.get("/candidates/:id/image", async (req, res) => {
     try {
       const rec = await requestStore(res).getCandidate(req.params.id, candidateContext(req.query));
-      res.setHeader("Content-Type", rec.imageMime || "image/png");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(rec.image);
+      sendAsset(res, { buffer: rec.image, mime: rec.imageMime });
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });

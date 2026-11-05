@@ -1,4 +1,5 @@
 import express from "express";
+import { sendAsset } from "./asset-response.js";
 import { PgStore } from "./store.js";
 import { AccessError, requestStore } from "./access.js";
 import { AssetError, validateAssetImage } from "./battlefield-domain.js";
@@ -258,10 +259,7 @@ function sendImage(res: express.Response, image: { buffer: Buffer; mime: string;
     res.status(404).json({ error: "image not found" });
     return;
   }
-  res.setHeader("Content-Type", image.mime || "image/png");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Cache-Control", "no-store");
-  res.send(image.buffer);
+  sendAsset(res, image);
 }
 
 export function mountTeamRoutes(app: express.Express): void {

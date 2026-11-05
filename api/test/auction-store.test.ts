@@ -106,19 +106,19 @@ describe("pg auction persist/rehydrate", () => {
     try {
       const c1 = await store.saveCandidate(
         "Aday A1",
-        Buffer.from([1]),
+        PNG,
         "image/png",
         "a1.png",
       );
       const c2 = await store.saveCandidate(
         "Aday A2",
-        Buffer.from([2]),
+        PNG,
         "image/png",
         "a2.png",
       );
       const c3 = await store.saveCandidate(
         "Aday A3",
-        Buffer.from([3]),
+        PNG,
         "image/png",
         "a3.png",
       );
@@ -203,7 +203,7 @@ describe("pg auction persist/rehydrate", () => {
     try {
       const c = await store.saveCandidate(
         "Aday Sil",
-        Buffer.from([9]),
+        PNG,
         "image/png",
         "sil.png",
       );

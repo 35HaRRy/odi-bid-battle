@@ -1,4 +1,9 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+
+// Domain separation prevents a returned CSRF token from becoming a cookie credential.
+export function csrfForCookie(secret: string, kind: "session" | "anonymous"): string {
+  return createHmac("sha256", secret).update(`odi:csrf:v1:${kind}`).digest("base64url");
+}
 
 const N = 32768;
 const r = 8;
