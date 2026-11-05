@@ -4,6 +4,7 @@ import { t, type Lang } from "./i18n";
 import { Modal } from "./modal";
 import { ImageField } from "./image-field";
 import { ImagePreview } from "./image-preview";
+import { PublicFilter, ShareField, canEdit } from "./sharing";
 
 export function BattlefieldEditor({
   lang,
@@ -13,13 +14,14 @@ export function BattlefieldEditor({
 }: {
   lang: Lang;
   initial: BattlefieldSummary | null;
-  onSave: (fields: { name: string; geography: string; history: string }, file: File | null) => Promise<void>;
+  onSave: (fields: { name: string; geography: string; history: string }, file: File | null, isPublic: boolean) => Promise<void>;
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [geography, setGeography] = useState(initial?.geography ?? "");
   const [history, setHistory] = useState(initial?.history ?? "");
   const [file, setFile] = useState<File | null>(null);
+  const [isPublic, setPublic] = useState(initial?.isPublic ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const savedUrl = initial ? api.battlefieldImageUrl(initial.id) : null;
@@ -49,7 +51,7 @@ export function BattlefieldEditor({
           setSaving(true);
           setError(null);
           try {
-            await onSave({ name, geography, history }, file);
+            await onSave({ name, geography, history }, file, isPublic);
             onClose();
           } catch (err) {
             setError(
@@ -114,6 +116,7 @@ export function BattlefieldEditor({
             emptyLabel={t(lang, "noImage")}
             onSelect={setFile}
           />
+          <ShareField lang={lang} checked={isPublic} onChange={setPublic} />
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "12px" }}>
             <button type="button" className="secondary" disabled={saving} onClick={onClose}>
               {t(lang, "cancel")}
@@ -129,8 +132,9 @@ export function BattlefieldEditor({
   );
 }
 
-export function BattlefieldLibrary({ lang }: { lang: Lang }) {
+export function BattlefieldLibrary({ lang, userId }: { lang: Lang; userId: string }) {
   const [battlefields, setBattlefields] = useState<BattlefieldSummary[]>([]);
+  const [includePublic, setIncludePublic] = useState(false);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<BattlefieldSummary | null | boolean>(false);
   const [pendingArchive, setPendingArchive] = useState<BattlefieldSummary | null>(null);
@@ -138,7 +142,7 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
 
   const load = async () => {
     try {
-      const list = await api.battlefields();
+      const list = await api.battlefields(includePublic);
       setBattlefields(list);
     } catch {
       setError(t(lang, "persistFail"));
@@ -146,13 +150,16 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
   };
 
   useEffect(() => {
-    load();
-  }, []);
+    let live = true;
+    api.battlefields(includePublic).then(list => { if (live) setBattlefields(list); }).catch(() => { if (live) setError(t(lang, "persistFail")); });
+    return () => { live = false; };
+  }, [includePublic, lang]);
 
   const filtered = battlefields.filter(
     (b) =>
-      b.name.toLowerCase().includes(query.toLowerCase()) ||
-      b.geography.toLowerCase().includes(query.toLowerCase()),
+      (canEdit(b, userId) || (includePublic && b.isPublic)) && (
+        b.name.toLowerCase().includes(query.toLowerCase()) ||
+        b.geography.toLowerCase().includes(query.toLowerCase())),
   );
 
   return (
@@ -166,6 +173,7 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
       </div>
 
       <div className="library-tools">
+        <PublicFilter lang={lang} checked={includePublic} onChange={setIncludePublic} />
         <input
           aria-label={t(lang, "search")}
           placeholder={t(lang, "search") + "..."}
@@ -185,8 +193,9 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
             <section className="battle-entry" key={b.id} style={{ background: "var(--page)", border: "1px solid var(--line)", padding: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
               <ImagePreview lang={lang} src={api.battlefieldImageUrl(b.id)} alt={b.name} />
               <h3>{b.name}</h3>
+              <span className="mini-label">{t(lang, canEdit(b, userId) ? (b.isPublic ? "publicRecord" : "privateRecord") : "sharedRecord")}</span>
               <p style={{ fontSize: "13px", color: "var(--muted)", overflowWrap: "anywhere" }}>{b.geography}</p>
-              <div className="battle-entry-actions" style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "auto" }}>
+              {canEdit(b, userId) && <div className="battle-entry-actions" style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "auto" }}>
                 <button className="secondary small-btn" onClick={() => setEditing(b)}>
                   {t(lang, "edit")}
                 </button>
@@ -196,7 +205,7 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
                 >
                   {t(lang, "archive")}
                 </button>
-              </div>
+              </div>}
             </section>
           ))}
         </div>
@@ -207,12 +216,12 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
           lang={lang}
           initial={typeof editing === "object" ? editing : null}
           onClose={() => setEditing(false)}
-          onSave={async (fields, file) => {
+          onSave={async (fields, file, isPublic) => {
             if (editing && typeof editing === "object") {
-              await api.editBattlefield(editing.id, fields, file);
+              await api.editBattlefield(editing.id, fields, file, isPublic);
             } else {
               if (!file) throw new Error("image required");
-              await api.createBattlefield(fields, file);
+              await api.createBattlefield(fields, file, isPublic);
             }
             await load();
           }}
@@ -254,14 +263,17 @@ export function BattlefieldLibrary({ lang }: { lang: Lang }) {
 
 export function BattlefieldPreparation({
   lang,
+  userId,
   auction,
   onAuctionChange,
 }: {
   lang: Lang;
+  userId: string;
   auction: Auction;
   onAuctionChange: (auction: Auction) => void;
 }) {
   const [battlefields, setBattlefields] = useState<BattlefieldSummary[]>([]);
+  const [includePublic, setIncludePublic] = useState(false);
   const [draft, setDraft] = useState<DraftBattlefield | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -339,7 +351,7 @@ export function BattlefieldPreparation({
     let live = true;
     (async () => {
       try {
-        const list = await api.battlefields();
+        const list = await api.battlefields(includePublic);
         if (!live) return;
         setBattlefields(list);
         await loadDraft(auction.battlefieldId);
@@ -351,7 +363,7 @@ export function BattlefieldPreparation({
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auction.id, auction.battlefieldId]);
+  }, [auction.id, auction.battlefieldId, includePublic]);
 
   useEffect(() => {
     let live = true;
@@ -468,6 +480,7 @@ export function BattlefieldPreparation({
         <p style={{ color: "var(--muted)", fontSize: "13px" }}>{t(lang, "battleSubtitle")}</p>
       </div>
       {error && <div style={{ color: "var(--red)", marginBottom: "12px" }}>{error}</div>}
+      <PublicFilter lang={lang} checked={includePublic} onChange={setIncludePublic} />
       <div className="battle-layout">
         <div
           ref={listRef}
@@ -485,7 +498,7 @@ export function BattlefieldPreparation({
               {t(lang, "clearSelection")}
             </button>
           )}
-          {battlefields.map((b) => {
+          {battlefields.filter(b => canEdit(b, userId) || (includePublic && b.isPublic)).map((b) => {
             const selected = auction.battlefieldId === b.id;
             return (
               <button
@@ -501,6 +514,7 @@ export function BattlefieldPreparation({
                   style={{ width: "100%", height: "90px", objectFit: "contain", background: "#e9ddbe", border: "1px solid var(--line)" }}
                 />
                 <strong>{b.name}</strong>
+                <span className="mini-label">{t(lang, canEdit(b, userId) ? (b.isPublic ? "publicRecord" : "privateRecord") : "sharedRecord")}</span>
                 <span style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {t(lang, "geographyFeatures")}: {selected && draft ? draft.geography : b.geography}
                 </span>

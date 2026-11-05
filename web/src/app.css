@@ -397,3 +397,27 @@ textarea:focus-visible {
     font-size: 10px;
   }
 }
+.sharing-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  margin-block: 6px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.sharing-field input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--green);
+}
+
+.library-tools,
+.catalog-tools {
+  flex-wrap: wrap;
+}

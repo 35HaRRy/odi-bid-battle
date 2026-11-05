@@ -2,6 +2,12 @@ export type Lang = "tr" | "en";
 
 const STRINGS: Record<Lang, Record<string, string>> = {
   tr: {
+    includePublic: "Herkese açık kayıtları da göster",
+    shareRecord: "Bu kaydı herkese açık paylaş",
+    publicRecord: "Herkese açık",
+    privateRecord: "Özel",
+    sharedRecord: "Paylaşılan · Salt okunur",
+    editList: "Listeyi düzenle",
     auth_login: "Giriş yap",
     auth_register: "Kayıt ol",
     auth_forgot: "Şifremi unuttum",
@@ -283,6 +289,12 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     nothingToUndo: "Geri alınacak işlem yok.",
   },
   en: {
+    includePublic: "Include public records",
+    shareRecord: "Share this record publicly",
+    publicRecord: "Public",
+    privateRecord: "Private",
+    sharedRecord: "Shared · Read only",
+    editList: "Edit list",
     auth_login: "Sign in",
     auth_register: "Create account",
     auth_forgot: "Forgot password",

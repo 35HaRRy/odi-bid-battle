@@ -7,6 +7,6 @@ import { SessionBoundary } from "./auth";
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <SessionBoundary>{() => <App />}</SessionBoundary>
+    <SessionBoundary>{user => <App userId={user.id} />}</SessionBoundary>
   </React.StrictMode>,
 );

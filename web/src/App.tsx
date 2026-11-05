@@ -14,6 +14,7 @@ import {
   searchForVisibleRecord,
 } from "./catalog-scroll";
 import type { FieldError } from "./api";
+import { PublicFilter, ShareField, canEdit } from "./sharing";
 
 type Tab = "auctions" | "catalog" | "lists" | "draft" | "live" | "result" | "battlefields";
 
@@ -112,6 +113,7 @@ function CandidateEditDialog({
   previewUrl,
   onClose,
   onSave,
+  initialPublic,
 }: {
   lang: Lang;
   title: string;
@@ -119,10 +121,12 @@ function CandidateEditDialog({
   initialName: string;
   previewUrl: string;
   onClose: () => void;
-  onSave: (name: string, file: File | null) => void;
+  onSave: (name: string, file: File | null, isPublic?: boolean) => void;
+  initialPublic?: boolean;
 }) {
   const [name, setName] = useState(initialName);
   const [file, setFile] = useState<File | null>(null);
+  const [isPublic, setPublic] = useState(initialPublic ?? false);
   return (
     <Modal titleId="editor-title" onClose={onClose}>
       <dialog aria-labelledby="editor-title">
@@ -130,7 +134,7 @@ function CandidateEditDialog({
           method="dialog"
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim()) onSave(name, file);
+            if (name.trim()) onSave(name, file, initialPublic === undefined ? undefined : isPublic);
           }}
         >
           <h2 id="editor-title">{title}</h2>
@@ -159,6 +163,7 @@ function CandidateEditDialog({
               onSelect={setFile}
             />
             <p className="description">{t(lang, "keepImage")}</p>
+            {initialPublic !== undefined && <ShareField lang={lang} checked={isPublic} onChange={setPublic} />}
           </div>
           <div className="dialog-actions">
             <button type="button" className="secondary" onClick={onClose}>
@@ -344,24 +349,40 @@ function DraftStepFooter({
   );
 }
 
-function CatalogPane({
+export function CatalogPane({
   lang,
-  candidates,
+  candidates: ownCandidates,
+  userId,
   addedIds,
   onAdd,
   onEdit,
-  resolveName,
 }: {
   lang: Lang;
+  userId: string;
   candidates: Candidate[];
   addedIds: string[];
   onAdd: (id: string) => void;
-  onEdit?: (id: string) => void;
-  resolveName?: (id: string) => string;
+  onEdit?: (id: string, candidate: Candidate) => void;
 }) {
   const [search, setSearch] = useState("");
+  const [includePublic, setIncludePublic] = useState(false);
+  const [candidates, setCandidates] = useState(() => ownCandidates.filter(c => canEdit(c, userId)));
+  const [loadError, setLoadError] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setLoadError(false);
+    api.candidates(includePublic)
+      .then(items => { if (live) setCandidates(items); })
+      .catch(() => {
+        if (!live) return;
+        setCandidates(ownCandidates.filter(c => canEdit(c, userId)));
+        setLoadError(true);
+      });
+    return () => { live = false; };
+  }, [includePublic, ownCandidates, userId]);
   const q = search.toLocaleLowerCase(lang);
-  const shown = candidates.filter((c) =>
+  const selectable = candidates.filter(c => canEdit(c, userId) || (includePublic && c.isPublic));
+  const shown = selectable.filter((c) =>
     c.name.toLocaleLowerCase(lang).includes(q),
   );
   return (
@@ -369,10 +390,11 @@ function CatalogPane({
       <div className="panel-title">
         <h3>{t(lang, "catalog")}</h3>
         <span>
-          {candidates.length} {t(lang, "candidates")}
+          {selectable.length} {t(lang, "candidates")}
         </span>
       </div>
       <div className="catalog-tools">
+        <PublicFilter lang={lang} checked={includePublic} onChange={setIncludePublic} />
         <input
           type="search"
           aria-label={t(lang, "search")}
@@ -381,6 +403,7 @@ function CatalogPane({
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
+      {loadError && <p className="error" role="alert">{t(lang, "persistFail")}</p>}
       <div className="catalog-scroll" tabIndex={0} aria-label={t(lang, "catalog")}>
         <div className="catalog-grid">
           {shown.map((c) => (
@@ -388,10 +411,11 @@ function CatalogPane({
               <ImagePreview
                 lang={lang}
                 src={api.imageUrl(c.id)}
-                alt={resolveName ? resolveName(c.id) : c.name}
+                alt={c.name}
                 className="candidate-image card-embed"
               />
-              <h4>{resolveName ? resolveName(c.id) : c.name}</h4>
+              <h4>{c.name}</h4>
+              <span className="mini-label">{t(lang, canEdit(c, userId) ? (c.isPublic ? "publicRecord" : "privateRecord") : "sharedRecord")}</span>
               <div className="candidate-controls">
                 <button
                   className="secondary small-btn"
@@ -400,11 +424,11 @@ function CatalogPane({
                 >
                   {addedIds.includes(c.id) ? t(lang, "added") : t(lang, "add")}
                 </button>
-                {onEdit && (
+                {onEdit && canEdit(c, userId) && (
                   <button
                     className="quiet"
                     aria-label={`${c.name}: ${t(lang, "edit")}`}
-                    onClick={() => onEdit(c.id)}
+                    onClick={() => onEdit(c.id, c)}
                   >
                     {t(lang, "edit")}
                   </button>
@@ -433,6 +457,7 @@ function OrderedEntries({
   emptyText,
   resolveName,
   context,
+  readOnly = false,
 }: {
   lang: Lang;
   entries: string[];
@@ -443,6 +468,7 @@ function OrderedEntries({
   emptyText: string;
   resolveName?: (id: string) => string;
   context: CandidateContext;
+  readOnly?: boolean;
 }) {
   const label = (cid: string) =>
     resolveName ? resolveName(cid) : nameOf(candidates, cid);
@@ -453,7 +479,7 @@ function OrderedEntries({
           <span className="order-number">{idx + 1}</span>
           <ImagePreview lang={lang} src={api.imageUrl(cid, context)} alt={label(cid)} enlargeLabel={label(cid)} className="ordered-thumb" />
           <span className="ordered-name">{label(cid)}</span>
-          <div className="ordered-actions">
+          {!readOnly && <div className="ordered-actions">
             {onEdit && (
               <button
                 className="icon-button"
@@ -486,7 +512,7 @@ function OrderedEntries({
             >
               ✕
             </button>
-          </div>
+          </div>}
         </li>
       ))}
       {entries.length === 0 && <li className="empty">{emptyText}</li>}
@@ -494,17 +520,31 @@ function OrderedEntries({
   );
 }
 
-function Catalog({
+export function Catalog({
   lang,
-  items,
-  onItems,
+  items: ownItems,
+  onItems: onOwnItems,
+  userId,
   onError,
 }: {
   lang: Lang;
+  userId: string;
   items: Candidate[];
   onItems: (c: Candidate[]) => void;
   onError: (m: string | null) => void;
 }) {
+  const [items, setItems] = useState(ownItems);
+  const [includePublic, setIncludePublic] = useState(false);
+  const [isPublic, setPublic] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.candidates(includePublic).then(records => { if (live) setItems(records); }).catch(() => { if (live) onError(t(lang, "persistFail")); });
+    return () => { live = false; };
+  }, [includePublic, lang, onError]);
+  function onItems(records: Candidate[]) {
+    setItems(records);
+    onOwnItems(records.filter(record => canEdit(record, userId)));
+  }
   const [name, setName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [search, setSearch] = useState("");
@@ -514,7 +554,8 @@ function Catalog({
   const pendingScrollId = useRef<string | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
   const q = search.toLocaleLowerCase(lang);
-  const shown = items.filter((c) =>
+  const visibleItems = items.filter(c => canEdit(c, userId) || (includePublic && c.isPublic));
+  const shown = visibleItems.filter((c) =>
     c.name.toLocaleLowerCase(lang).includes(q),
   );
   const editing = editingId ? items.find((c) => c.id === editingId) ?? null : null;
@@ -533,7 +574,7 @@ function Catalog({
   async function create() {
     if (!name.trim() || !file) return;
     try {
-      const c = await api.createCandidate(name, file);
+      const c = await api.createCandidate(name, file, isPublic);
       const r = applyCatalogCreate(items, c);
       pendingScrollId.current = r.scrollId;
       setSearch((s) => searchForVisibleRecord(s, c.name, lang));
@@ -541,6 +582,7 @@ function Catalog({
       setName("");
       setFile(null);
       setShowCreate(false);
+      setPublic(false);
       onError(null);
     } catch (e) {
       onError(
@@ -555,6 +597,7 @@ function Catalog({
     setShowCreate(false);
     setName("");
     setFile(null);
+    setPublic(false);
   }
 
   async function archive(id: string) {
@@ -574,10 +617,10 @@ function Catalog({
     }
   }
 
-  async function saveEdit(name: string, file: File | null) {
+  async function saveEdit(name: string, file: File | null, isPublic?: boolean) {
     if (!editing) return;
     try {
-      const updated = await api.editCatalogCandidate(editing.id, name, file);
+      const updated = await api.editCatalogCandidate(editing.id, name, file, isPublic);
       if (file) api.bumpCandidateImage(updated.id);
       const r = applyCatalogEdit(items, editing.id, updated);
       if (r.scrollId) {
@@ -608,6 +651,7 @@ function Catalog({
         }
       />
       <div className="library-tools">
+        <PublicFilter lang={lang} checked={includePublic} onChange={setIncludePublic} />
         <input
           type="search"
           aria-label={t(lang, "search")}
@@ -616,7 +660,7 @@ function Catalog({
           onChange={(e) => setSearch(e.target.value)}
         />
         <span>
-          {items.length} {t(lang, "candidates")}
+          {visibleItems.length} {t(lang, "candidates")}
         </span>
       </div>
       {showCreate && (
@@ -654,6 +698,7 @@ function Catalog({
                   emptyLabel={t(lang, "noImage")}
                   onSelect={setFile}
                 />
+                <ShareField lang={lang} checked={isPublic} onChange={setPublic} />
               </div>
               <div className="dialog-actions">
                 <button type="button" className="secondary" onClick={closeCreate}>
@@ -686,7 +731,8 @@ function Catalog({
                 className="candidate-image card-embed"
               />
               <h4>{c.name}</h4>
-              <div className="candidate-controls">
+              <span className="mini-label">{t(lang, canEdit(c, userId) ? (c.isPublic ? "publicRecord" : "privateRecord") : "sharedRecord")}</span>
+              {canEdit(c, userId) && <div className="candidate-controls">
                 <button
                   className="secondary small-btn"
                   aria-label={`${c.name}: ${t(lang, "edit")}`}
@@ -697,7 +743,7 @@ function Catalog({
                 <button className="quiet" onClick={() => archive(c.id)}>
                   {t(lang, "archive")}
                 </button>
-              </div>
+              </div>}
             </article>
           ))}
         </div>
@@ -709,6 +755,7 @@ function Catalog({
           title={t(lang, "editCandidate")}
           description={t(lang, "candidateCopy")}
           initialName={editing.name}
+          initialPublic={editing.isPublic}
           previewUrl={api.imageUrl(editing.id)}
           onClose={() => setEditingId(null)}
           onSave={saveEdit}
@@ -729,18 +776,25 @@ function Catalog({
   );
 }
 
-function Lists({
+export function Lists({
   lang,
+  userId,
   candidates,
   onCandidates,
   onError,
 }: {
   lang: Lang;
+  userId: string;
   candidates: Candidate[];
   onCandidates: (c: Candidate[]) => void;
   onError: (m: string | null) => void;
 }) {
   const [lists, setLists] = useState<CandidateList[]>([]);
+  const [includePublic, setIncludePublic] = useState(false);
+  const [isPublic, setPublic] = useState(false);
+  const [entryPublic, setEntryPublic] = useState(false);
+  const [editingList, setEditingList] = useState<CandidateList | null>(null);
+  const [retainedList, setRetainedList] = useState<CandidateList | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [newName, setNewName] = useState("");
@@ -749,35 +803,44 @@ function Lists({
   const [showCreateEntry, setShowCreateEntry] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingScope, setEditingScope] = useState<"entry" | "catalog">("entry");
+  const [editingRoot, setEditingRoot] = useState<Candidate | null>(null);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [cloningId, setCloningId] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const active = lists.find((l) => l.id === activeId) ?? null;
-  const references = lists.flatMap((l) => l.entries.map((id) => ({ id, context: { listId: l.id } })));
+  const active = lists.find((l) => l.id === activeId) ?? (retainedList?.id === activeId ? retainedList : null);
+  const editable = !!active && canEdit(active, userId);
+  const visibleLists = lists.filter(l => canEdit(l, userId) || (includePublic && l.isPublic));
+  const references = [...lists, ...(active ? [active] : [])].flatMap((l) => l.entries.map((id) => ({ id, context: { listId: l.id } })));
   const extraNames = useMissingCandidateNames(candidates, references, () => {});
   const resolveName = (id: string) => nameOf(candidates, id, extraNames);
   const editingCandidate =
-    editingId ? [...candidates].find((c) => c.id === editingId) : null;
+    editingRoot ?? (editingId ? candidates.find((c) => c.id === editingId) : null);
   const editingName =
     editingCandidate?.name ?? (editingId ? extraNames[editingId] : undefined) ?? "";
 
   useEffect(() => {
+    let live = true;
     api
-      .lists()
+      .lists(includePublic)
       .then((ls) => {
+        if (!live) return;
         setLists(ls);
         setActiveId((a) => a ?? ls[0]?.id ?? null);
       })
-      .catch(() => onError(t(lang, "persistFail")));
-  }, [lang, onError]);
+      .catch(() => { if (live) onError(t(lang, "persistFail")); });
+    return () => { live = false; };
+  }, [lang, onError, includePublic]);
+
+  useEffect(() => { if (active) setRetainedList(active); }, [active]);
 
   async function createList() {
     try {
-      const l = await api.createList(name, true);
+      const l = await api.createList(name, true, isPublic);
       setLists((p) => [...p, l]);
       setActiveId(l.id);
       setName("");
       setShowCreateList(false);
+      setPublic(false);
     } catch {
       onError(t(lang, "persistFail"));
     }
@@ -786,6 +849,7 @@ function Lists({
   function closeCreateList() {
     setShowCreateList(false);
     setName("");
+    setPublic(false);
   }
 
   function scrollToEditor() {
@@ -812,23 +876,27 @@ function Lists({
   async function mutate(p: Promise<CandidateList>) {
     try {
       const updated = await p;
+      setRetainedList(updated);
       setLists((ls) => ls.map((l) => (l.id === updated.id ? updated : l)));
       onError(null);
+      return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 409)
         onError(t(lang, "duplicate"));
       else onError(t(lang, "persistFail"));
+      return false;
     }
   }
 
   async function createAndAdd() {
     if (!active || !newName.trim() || !newFile) return;
     try {
-      const c = await api.createCandidate(newName, newFile);
+      const c = await api.createCandidate(newName, newFile, entryPublic);
       onCandidates([...candidates, c]);
       setNewName("");
       setNewFile(null);
       setShowCreateEntry(false);
+      setEntryPublic(false);
       await mutate(api.addEntry(active.id, c.id));
     } catch {
       onError(t(lang, "persistFail"));
@@ -839,6 +907,7 @@ function Lists({
     setShowCreateEntry(false);
     setNewName("");
     setNewFile(null);
+    setEntryPublic(false);
   }
 
   async function confirmArchiveList() {
@@ -879,10 +948,10 @@ function Lists({
     }
   }
 
-  async function saveCatalogEdit(name: string, file: File | null) {
+  async function saveCatalogEdit(name: string, file: File | null, isPublic?: boolean) {
     if (!editingId) return;
     try {
-      const updated = await api.editCatalogCandidate(editingId, name, file);
+      const updated = await api.editCatalogCandidate(editingId, name, file, isPublic);
       if (file) api.bumpCandidateImage(updated.id);
       if (updated.id === editingId) {
         onCandidates(candidates.map((c) => (c.id === updated.id ? updated : c)));
@@ -915,6 +984,7 @@ function Lists({
           </button>
         }
       />
+      <PublicFilter lang={lang} checked={includePublic} onChange={setIncludePublic} />
       {showCreateList && (
         <Modal titleId="list-create-title" onClose={closeCreateList}>
           <dialog aria-labelledby="list-create-title">
@@ -926,6 +996,7 @@ function Lists({
               }}
             >
               <h2 id="list-create-title">{t(lang, "newList")}</h2>
+              <ShareField lang={lang} checked={isPublic} onChange={setPublic} />
               <div className="modal-form">
                 <label>
                   {t(lang, "name")}
@@ -952,7 +1023,7 @@ function Lists({
         </Modal>
       )}
       <div className="list-library">
-        {lists.map((l) => (
+        {visibleLists.map((l) => (
           <section
             className="list-entry"
             key={l.id}
@@ -960,6 +1031,7 @@ function Lists({
           >
             <div className="panel-title">
               <h2>{l.name || t(lang, "draft")}</h2>
+              <span className="mini-label">{t(lang, canEdit(l, userId) ? (l.isPublic ? "publicRecord" : "privateRecord") : "sharedRecord")}</span>
               <span>
                 {l.entries.length} {t(lang, "candidates")}
               </span>
@@ -994,27 +1066,30 @@ function Lists({
               >
                 {t(lang, "useList")}
               </button>
-              <button className="quiet" onClick={() => setConfirmArchiveId(l.id)}>
+              {canEdit(l, userId) && <button className="quiet" onClick={() => setEditingList({ ...l })}>{t(lang, "edit")}</button>}
+              {canEdit(l, userId) && <button className="quiet" onClick={() => setConfirmArchiveId(l.id)}>
                 {t(lang, "archive")}
-              </button>
+              </button>}
             </div>
           </section>
         ))}
       </div>
-      {lists.length === 0 && <p className="empty">{t(lang, "noLists")}</p>}
+      {visibleLists.length === 0 && <p className="empty">{t(lang, "noLists")}</p>}
       {active && (
         <div className="split" ref={editorRef}>
-          <CatalogPane
+          {editable && <CatalogPane
+            key={active.id}
             lang={lang}
+            userId={userId}
             candidates={candidates}
             addedIds={active.entries}
             onAdd={(cid) => mutate(api.addEntry(active.id, cid))}
-            onEdit={(cid) => {
+            onEdit={(cid, candidate) => {
               setEditingId(cid);
+              setEditingRoot(candidate);
               setEditingScope("catalog");
             }}
-            resolveName={resolveName}
-          />
+          />}
           <section>
             <div className="selected-head">
               <h3>{active.name || t(lang, "draft")}</h3>
@@ -1023,11 +1098,11 @@ function Lists({
               </span>
             </div>
             <p className="source">{t(lang, "savedSource")}</p>
-            <div className="create-row">
+            {editable && <div className="create-row">
               <button className="secondary" onClick={() => setShowCreateEntry(true)}>
                 {t(lang, "createAndAdd")}
               </button>
-            </div>
+            </div>}
             {showCreateEntry && (
               <Modal titleId="entry-create-title" onClose={closeCreateEntry}>
                 <dialog aria-labelledby="entry-create-title">
@@ -1039,6 +1114,7 @@ function Lists({
                     }}
                   >
                     <h2 id="entry-create-title">{t(lang, "createAndAdd")}</h2>
+                    <ShareField lang={lang} checked={entryPublic} onChange={setEntryPublic} />
                     <p className="description">{t(lang, "newCandidateDescription")}</p>
                     <div className="modal-form">
                       <label>
@@ -1079,12 +1155,14 @@ function Lists({
             <OrderedEntries
               lang={lang}
               context={{ listId: active.id }}
+              readOnly={!editable}
               entries={active.entries}
               candidates={candidates}
               onReorder={(cid, to) => mutate(api.reorder(active.id, cid, to))}
               onRemove={(cid) => mutate(api.removeEntry(active.id, cid))}
               onEdit={(cid) => {
                 setEditingId(cid);
+                setEditingRoot(null);
                 setEditingScope("entry");
               }}
               emptyText={t(lang, "emptyList")}
@@ -1102,10 +1180,29 @@ function Lists({
           title={t(lang, "editCandidate")}
           description={t(lang, "candidateCopy")}
           initialName={editingName}
+          initialPublic={editingScope === "catalog" ? editingCandidate?.isPublic : undefined}
           previewUrl={api.imageUrl(editingId, editingScope === "entry" && active ? { listId: active.id } : undefined)}
           onClose={() => setEditingId(null)}
           onSave={editingScope === "entry" ? saveEntryEdit : saveCatalogEdit}
         />
+      )}
+      {editingList && (
+        <Modal titleId="list-edit-title" onClose={() => setEditingList(null)}>
+          <dialog aria-labelledby="list-edit-title">
+            <form onSubmit={async event => {
+              event.preventDefault();
+              if (await mutate(api.editList(editingList.id, editingList.name, editingList.isPublic))) setEditingList(null);
+            }}>
+              <h2 id="list-edit-title">{t(lang, "editList")}</h2>
+              <label>{t(lang, "name")}<input value={editingList.name} maxLength={200} onChange={event => setEditingList({ ...editingList, name: event.target.value })} /></label>
+              <ShareField lang={lang} checked={editingList.isPublic} onChange={value => setEditingList({ ...editingList, isPublic: value })} />
+              <div className="dialog-actions">
+                <button type="button" className="secondary" onClick={() => setEditingList(null)}>{t(lang, "cancel")}</button>
+                <button type="submit" className="primary">{t(lang, "save")}</button>
+              </div>
+            </form>
+          </dialog>
+        </Modal>
       )}
       {confirmArchiveId && (
         <ConfirmDialog
@@ -1128,8 +1225,9 @@ function stateKey(status: string): string {
   return "draftState";
 }
 
-function AuctionWorkspace({
+export function AuctionWorkspace({
   lang,
+  userId,
   candidates,
   onError,
   view,
@@ -1140,6 +1238,7 @@ function AuctionWorkspace({
   onCandidates,
 }: {
   lang: Lang;
+  userId: string;
   candidates: Candidate[];
   onError: (m: string | null) => void;
   view: "auctions" | "draft" | "live" | "result";
@@ -1159,12 +1258,15 @@ function AuctionWorkspace({
   const [sourceId, setSourceId] = useState("");
   const [showCreateDraft, setShowCreateDraft] = useState(false);
   const [lists, setLists] = useState<CandidateList[]>([]);
+  const [includePublicLists, setIncludePublicLists] = useState(false);
+  const sourceLists = lists.filter(l => canEdit(l, userId) || (includePublicLists && l.isPublic));
   const [rename, setRename] = useState("");
   const [templateDraft, setTemplateDraft] = useState("");
   const [generalSaving, setGeneralSaving] = useState(false);
   const [generalSaved, setGeneralSaved] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingRoot, setEditingRoot] = useState<Candidate | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [cloneSourceId, setCloneSourceId] = useState<string | null>(null);
   const [cloneName, setCloneName] = useState("");
@@ -1195,15 +1297,20 @@ function AuctionWorkspace({
   const draftExtra = useMissingCandidateNames(candidates, draftReferences, () => {});
   const resolveDraftName = (id: string) => nameOf(candidates, id, draftExtra);
   const editingDraftName =
-    (editingId ? candidates.find((c) => c.id === editingId)?.name : undefined) ??
+    editingRoot?.name ?? (editingId ? candidates.find((c) => c.id === editingId)?.name : undefined) ??
     (editingId ? draftExtra[editingId] : undefined) ??
     "";
 
   useEffect(() => {
+    let live = true;
     api
-      .lists()
-      .then(setLists)
-      .catch(() => onError(t(lang, "persistFail")));
+      .lists(includePublicLists)
+      .then(records => { if (live) setLists(records); })
+      .catch(() => { if (live) onError(t(lang, "persistFail")); });
+    return () => { live = false; };
+  }, [includePublicLists, lang, onError]);
+
+  useEffect(() => {
     api
       .auctions()
       .then(async (as) => {
@@ -1229,9 +1336,8 @@ function AuctionWorkspace({
   }, [lang, onError]);
 
   useEffect(() => {
-    if (lists.length === 0) return;
     setSourceId((prev) =>
-      prev && lists.some((l) => l.id === prev) ? prev : lists[0].id,
+      prev && lists.some((l) => l.id === prev) ? prev : lists[0]?.id ?? "",
     );
   }, [lists]);
 
@@ -1253,7 +1359,7 @@ function AuctionWorkspace({
 
   async function create() {
     try {
-      const a = await api.createAuction(newName, sourceId || null, newTemplate);
+      const a = await api.createAuction(newName, sourceLists.some(l => l.id === sourceId) ? sourceId : null, newTemplate);
       setAuctions((p) => [a, ...p]);
       setActiveId(a.id);
       localStorage.setItem("obb-selected-auction", a.id);
@@ -1388,7 +1494,7 @@ function AuctionWorkspace({
     }
   }
 
-  async function saveDraftEntryEdit(name: string, file: File | null) {
+  async function saveDraftEntryEdit(name: string, file: File | null, isPublic?: boolean) {
     if (!active || !editingId) return;
     try {
       if (active.entries.includes(editingId)) {
@@ -1405,7 +1511,7 @@ function AuctionWorkspace({
         );
         setAuctions((ls) => ls.map((x) => (x.id === auction.id ? auction : x)));
       } else {
-        const updated = await api.editCatalogCandidate(editingId, name, file);
+        const updated = await api.editCatalogCandidate(editingId, name, file, isPublic);
         onCandidates(
           updated.id === editingId
             ? candidates.map((c) => (c.id === updated.id ? updated : c))
@@ -1510,7 +1616,9 @@ function AuctionWorkspace({
             ) : draftStep === 1 ? (
               <div>
                 <BattlefieldPreparation
+                  key={active.id}
                   lang={lang}
+                  userId={userId}
                   auction={active}
                   onAuctionChange={(updated) => {
                     setAuctions((ls) =>
@@ -1523,12 +1631,13 @@ function AuctionWorkspace({
               <>
                 <div className="split">
                   <CatalogPane
+                    key={active.id}
                     lang={lang}
+                    userId={userId}
                     candidates={candidates}
                     addedIds={active.entries}
                     onAdd={(cid) => mutate(api.addAuctionEntry(active.id, cid))}
-                    onEdit={(cid) => setEditingId(cid)}
-                    resolveName={resolveDraftName}
+                    onEdit={(cid, candidate) => { setEditingId(cid); setEditingRoot(candidate); }}
                   />
                   <section>
                     <div className="selected-head">
@@ -1551,7 +1660,7 @@ function AuctionWorkspace({
                       onRemove={(cid) =>
                         mutate(api.removeAuctionEntry(active.id, cid))
                       }
-                      onEdit={(cid) => setEditingId(cid)}
+                      onEdit={(cid) => { setEditingId(cid); setEditingRoot(null); }}
                       emptyText={t(lang, "emptyList")}
                       resolveName={resolveDraftName}
                     />
@@ -1601,7 +1710,8 @@ function AuctionWorkspace({
             title={t(lang, "editCandidate")}
             description={t(lang, "candidateCopy")}
             initialName={editingDraftName}
-            previewUrl={api.imageUrl(editingId, { auctionId: active.id })}
+            initialPublic={active.entries.includes(editingId) ? undefined : editingRoot?.isPublic}
+            previewUrl={api.imageUrl(editingId, active.entries.includes(editingId) ? { auctionId: active.id } : undefined)}
             onClose={() => setEditingId(null)}
             onSave={saveDraftEntryEdit}
           />
@@ -1696,16 +1806,18 @@ function AuctionWorkspace({
                     autoFocus
                   />
                 </label>
+                <PublicFilter lang={lang} checked={includePublicLists} onChange={setIncludePublicLists} />
                 <label>
                   {t(lang, "fromList")}
                   <select
                     aria-label={t(lang, "fromList")}
-                    value={sourceId}
+                    value={sourceLists.some(l => l.id === sourceId) ? sourceId : ""}
                     onChange={(e) => setSourceId(e.target.value)}
                   >
-                    {lists.map((l) => (
+                    <option value="">{t(lang, "emptyList")}</option>
+                    {sourceLists.map((l) => (
                       <option key={l.id} value={l.id}>
-                        {l.name || t(lang, "draft")}
+                        {l.name || t(lang, "draft")}{!canEdit(l, userId) ? ` · ${t(lang, "sharedRecord")}` : ""}
                       </option>
                     ))}
                   </select>
@@ -1853,7 +1965,7 @@ function AuctionWorkspace({
   );
 }
 
-export default function App() {
+export default function App({ userId }: { userId: string }) {
   const [lang, setL] = useState<Lang>(() => getLang());
   const [tab, setTab] = useState<Tab>(() => readTabFromUrl());
   const [error, setError] = useState<string | null>(null);
@@ -1983,6 +2095,7 @@ export default function App() {
           {tab === "catalog" ? (
             <Catalog
               lang={lang}
+              userId={userId}
               items={candidates}
               onItems={setCandidates}
               onError={setError}
@@ -1990,15 +2103,17 @@ export default function App() {
           ) : tab === "lists" ? (
             <Lists
               lang={lang}
+              userId={userId}
               candidates={candidates}
               onCandidates={setCandidates}
               onError={setError}
             />
           ) : tab === "battlefields" ? (
-            <BattlefieldLibrary lang={lang} />
+            <BattlefieldLibrary lang={lang} userId={userId} />
           ) : (
             <AuctionWorkspace
               lang={lang}
+              userId={userId}
               candidates={candidates}
               onError={setError}
               view={
