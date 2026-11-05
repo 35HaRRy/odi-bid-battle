@@ -3,7 +3,7 @@ import { Children, createElement, isValidElement, type ReactElement, type ReactN
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { LandingPage, observeLanding } from "./landing";
-import { SessionBoundary, SessionOwner } from "./auth";
+import { AccountScreen, SessionBoundary, SessionOwner } from "./auth";
 import { setSessionCsrf } from "./api-transport";
 
 const hooks = vi.hoisted(() => ({ values: null as unknown[] | null, cursor: 0 }));
@@ -71,6 +71,38 @@ it("serves the public story even before session bootstrap completes", () => {
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
   const html = renderToStaticMarkup(createElement(SessionBoundary, { children: () => { throw new Error("private mount"); } }));
   expect(html).toContain("landing-page"); expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each(["unavailable", "busy", "blocked"])("landing CTA cannot enter private workspace while %s", async mode => {
+  const owner = new SessionOwner();
+  const view = { user: { id: "demo", username: "demo", email: "demo@example.test" }, csrfToken: "synthetic", googleEnabled: false, mailEnabled: false };
+  await owner.run(async () => view);
+  if (mode === "unavailable") owner.expire(false);
+  if (mode === "busy") void owner.run(() => new Promise(() => {}));
+  if (mode === "blocked") await owner.logout(async () => { throw new Error("offline"); }).catch(() => {});
+  const pushState = vi.fn();
+  vi.stubGlobal("window", { location: { href: "https://example.test/", origin: "https://example.test" }, history: { pushState } });
+  hooks.values = [owner, "en", new URL("https://example.test/"), "", true, mode === "unavailable"];
+  const children = vi.fn();
+  const landing = elements(SessionBoundary({ children })).find(el => el.type === LandingPage)!;
+  (landing.props.onStart as () => void)();
+  expect(pushState.mock.calls[0][2].pathname).toBe("/account");
+  expect(children).not.toHaveBeenCalled();
+});
+
+it("remounts account forms on mode changes so a consumed verification/reset cannot hide the sign-in form", async () => {
+  const owner = new SessionOwner();
+  await owner.run(async () => ({ user: null, csrfToken: "synthetic", googleEnabled: false, mailEnabled: true }));
+  const keys = [];
+  for (const mode of ["verify", "reset", "login"]) {
+    const url = new URL(mode === "login" ? "https://example.test/account" : `https://example.test/account/${mode === "verify" ? "verify-email" : "reset-password"}`);
+    vi.stubGlobal("window", { location: { href: url.href } });
+    hooks.cursor = 0;
+    hooks.values = [owner, "en", url, "synthetic-token", true, false];
+    const form = elements(SessionBoundary({ children: vi.fn() })).find(el => el.type === AccountScreen)!;
+    keys.push(form.key);
+  }
+  expect(new Set(keys).size).toBe(3);
 });
 
 it.each(["reduced", "no-observer"])("keeps all content visible with %s", fallback => {

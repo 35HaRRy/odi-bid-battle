@@ -258,7 +258,7 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
       window.history.pushState(null, "", url); setRoute(url);
     }} /> : !initialized || (state.busy && !!state.view?.user) ? <main className="account-shell" role="status">{t(lang, "auth_working")}</main> : state.blocked ? <main className="account-shell">{t(lang, "auth_logoutError")}</main> : showWorkspace ? <React.Fragment key={state.view!.user!.id}>{children(state.view!.user!)}</React.Fragment> : <>
       {!state.view && <button type="button" onClick={() => { setError(false); void owner.run(async () => ({ ...await authApi.session(), user: null })).catch(() => setError(true)); }}>{t(lang, "auth_retry")}</button>}
-      <AccountScreen owner={owner} mode={!state.view?.user && (mode === "link" || mode === "reauth") ? "login" : mode} token={token} lang={lang} onMode={navigate} />
+      <AccountScreen key={mode} owner={owner} mode={!state.view?.user && (mode === "link" || mode === "reauth") ? "login" : mode} token={token} lang={lang} onMode={navigate} />
     </>}
   </>;
 }

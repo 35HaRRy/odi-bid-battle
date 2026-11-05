@@ -56,6 +56,43 @@ const error = () => {};
 const update = () => {};
 
 const owner = { ownerUserId: "alice", isOwner: true, isPublic: false };
+
+it.each(["catalog", "lists", "library", "preparation"])("%s filter recovery clears only its own load failure", async kind => {
+  const onError = vi.fn();
+  const method = kind === "catalog" ? "candidates" : kind === "lists" ? "lists" : "battlefields";
+  vi.spyOn(api, method).mockRejectedValueOnce(new Error("filter failed")).mockResolvedValue([]);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { headers: { "content-type": "image/svg+xml" } })));
+  const auction: Auction = { id: "auction", name: "Own", sourceListId: null, followsSource: false, entries: [], battlefieldId: null, simulationPromptTemplate: "", status: "draft" };
+  const render = mount(() => kind === "catalog" ? Catalog({ lang: "en", userId: "alice", items: [], onItems: update, onError })
+    : kind === "lists" ? Lists({ lang: "en", userId: "alice", candidates: [], onCandidates: update, onError })
+    : kind === "library" ? BattlefieldLibrary({ lang: "en", userId: "alice" })
+    : BattlefieldPreparation({ lang: "en", userId: "alice", auction, onAuctionChange: update }));
+  render(); await settle();
+  expect(renderToStaticMarkup(render())).toContain(t("en", "persistFail"));
+  toggle(render(), true); render(); await settle();
+  expect(renderToStaticMarkup(render())).not.toContain(t("en", "persistFail"));
+  expect(onError).not.toHaveBeenCalled();
+});
+
+it.each(["library", "preparation"])("%s filter success preserves an unrelated mutation failure", async kind => {
+  const field = { ...owned, geography: "Geo", history: "Past", archivedAt: null };
+  vi.spyOn(api, "battlefields").mockResolvedValue([field]);
+  vi.spyOn(api, "archiveBattlefield").mockRejectedValue(new Error("mutation failed"));
+  vi.spyOn(api, "setAuctionBattlefield").mockRejectedValue(new Error("mutation failed"));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { headers: { "content-type": "image/svg+xml" } })));
+  const auction: Auction = { id: "auction", name: "Own", sourceListId: null, followsSource: false, entries: [], battlefieldId: null, simulationPromptTemplate: "", status: "draft" };
+  const render = mount(() => kind === "library" ? BattlefieldLibrary({ lang: "en", userId: "alice" })
+    : BattlefieldPreparation({ lang: "en", userId: "alice", auction, onAuctionChange: update }));
+  render(); await settle();
+  if (kind === "library") {
+    click(button(render(), t("en", "archive")));
+    await (elements(render()).find(el => el.props.className === "danger")!.props.onClick as () => Promise<void>)();
+  } else await (elements(render()).find(el => el.props.className === "battle-option")!.props.onClick as () => Promise<void>)();
+  expect(renderToStaticMarkup(render())).toContain(t("en", "persistFail"));
+  toggle(render(), true); render(); await settle();
+  expect(renderToStaticMarkup(render())).toContain(t("en", "persistFail"));
+});
+
 afterEach(() => { hooks.active = null; vi.restoreAllMocks(); vi.unstubAllGlobals(); setSessionCsrf(""); });
 
 it("filter_defaults_private_and_is_independent", () => {

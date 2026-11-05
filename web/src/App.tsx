@@ -534,11 +534,12 @@ export function Catalog({
   onError: (m: string | null) => void;
 }) {
   const [items, setItems] = useState(ownItems);
+  const [loadError, setLoadError] = useState(false);
   const [includePublic, setIncludePublic] = useState(false);
   const [isPublic, setPublic] = useState(false);
   useEffect(() => {
     let live = true;
-    api.candidates(includePublic).then(records => { if (live) setItems(records); }).catch(() => { if (live) onError(t(lang, "persistFail")); });
+    api.candidates(includePublic).then(records => { if (live) { setItems(records); setLoadError(false); } }).catch(() => { if (live) setLoadError(true); });
     return () => { live = false; };
   }, [includePublic, lang, onError]);
   function onItems(records: Candidate[]) {
@@ -641,6 +642,7 @@ export function Catalog({
 
   return (
     <section className="route-catalog">
+      <Status msg={loadError ? t(lang, "persistFail") : null} />
       <AppHeading
         title={t(lang, "catalog")}
         intro={t(lang, "catalogIntro")}
@@ -790,6 +792,7 @@ export function Lists({
   onError: (m: string | null) => void;
 }) {
   const [lists, setLists] = useState<CandidateList[]>([]);
+  const [loadError, setLoadError] = useState(false);
   const [includePublic, setIncludePublic] = useState(false);
   const [isPublic, setPublic] = useState(false);
   const [entryPublic, setEntryPublic] = useState(false);
@@ -825,9 +828,10 @@ export function Lists({
       .then((ls) => {
         if (!live) return;
         setLists(ls);
+        setLoadError(false);
         setActiveId((a) => a ?? ls[0]?.id ?? null);
       })
-      .catch(() => { if (live) onError(t(lang, "persistFail")); });
+      .catch(() => { if (live) setLoadError(true); });
     return () => { live = false; };
   }, [lang, onError, includePublic]);
 
@@ -975,6 +979,7 @@ export function Lists({
 
   return (
     <section className="route-lists">
+      <Status msg={loadError ? t(lang, "persistFail") : null} />
       <AppHeading
         title={t(lang, "lists")}
         intro={t(lang, "listsIntro")}

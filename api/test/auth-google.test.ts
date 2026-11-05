@@ -7,6 +7,7 @@ import { buildApp } from "../src/app.js";
 import { loadAuthConfig } from "../src/auth-config.js";
 import { PgStore } from "../src/store.js";
 import { createVerifiedUser } from "./helpers/auth.js";
+import { AuthStore } from "../src/auth-store.js";
 
 describe("Google OIDC protocol and linking", () => {
   const schema = `google_test_${randomUUID().replaceAll("-", "")}`;
@@ -17,13 +18,14 @@ describe("Google OIDC protocol and linking", () => {
   const realFetch = globalThis.fetch;
   let pool: Pool, admin: Pool, server: Server, base: string;
   let claims: Record<string, unknown>, failPkce: boolean, badSignature: boolean, userinfoSubject: string;
+  let tokenGate: (() => Promise<void>) | undefined;
   const codes = new Map<string, URL>();
   beforeAll(async () => {
     const value = process.env.AUTH_TEST_DATABASE_URL;
     if (!value || !/^\/[^/]*(?:test|disposable)[^/]*$/i.test(new URL(value).pathname)) throw new Error("Explicit disposable AUTH_TEST_DATABASE_URL required");
     admin = new Pool({ connectionString: value }); await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(value); url.searchParams.set("options", `-c search_path=${schema}`);
-    pool = new Pool({ connectionString: url.toString(), max: 4 });
+    pool = new Pool({ connectionString: url.toString(), max: 4, application_name: schema });
     await pool.query(await readFile(new URL("../../db/schema.sql", import.meta.url), "utf8"));
     const app = buildApp(new PgStore(pool), { config: { allowedOrigin: origin, appUrl: origin, production: false, trustedProxies: [], google } });
     server = app.listen(0, "127.0.0.1"); await new Promise<void>(resolve => server.once("listening", resolve));
@@ -36,6 +38,7 @@ describe("Google OIDC protocol and linking", () => {
       if (url.pathname === "/jwks") return json({ keys: [jwk] });
       if (url.pathname === "/v1/userinfo") return json({ sub: userinfoSubject, email: claims.email ?? "google@example.test", email_verified: claims.email_verified ?? true });
       if (url.pathname === "/token") {
+        await tokenGate?.();
         const body = new URLSearchParams(String(init?.body)), start = codes.get(body.get("code") ?? "");
         const challenge = createHash("sha256").update(body.get("code_verifier") ?? "").digest("base64url");
         if (failPkce || !start || challenge !== start.searchParams.get("code_challenge")) return json({ error: "invalid_grant" }, 400);
@@ -51,6 +54,7 @@ describe("Google OIDC protocol and linking", () => {
   });
   beforeEach(async () => {
     claims = {}; failPkce = false; badSignature = false; userinfoSubject = "subject-1"; codes.clear();
+    tokenGate = undefined;
     await pool.query("TRUNCATE auth_tokens,auth_sessions,auth_rate_limits; DELETE FROM app_users WHERE username<>'legacy'");
     if ((await pool.query("SELECT to_regclass('auth_oauth_states') AS table_name")).rows[0].table_name) await pool.query("DELETE FROM auth_oauth_states");
   });
@@ -188,6 +192,74 @@ describe("Google OIDC protocol and linking", () => {
     claims.sub="subject-3"; userinfoSubject="subject-3";
     const replacement=await b.start(true); expect((await b.request(replacement.callback)).status).toBe(409);
     expect(await count("auth_google_identities")).toBe(2);
+  });
+  it("serializes simultaneous competing links to the same issuer/subject", async () => {
+    const browsers = await Promise.all([browser(), browser()]);
+    for (const [i, b] of browsers.entries()) {
+      await createVerifiedUser(pool, `competitor_${i}`);
+      await b.request("/auth/login", { login: `competitor_${i}`, password: "fixture-password" });
+      await b.request("/auth/reauthenticate", { password: "fixture-password" });
+    }
+    const flows = await Promise.all(browsers.map(b => b.start(true)));
+    let arrived = 0, release!: () => void;
+    const both = new Promise<void>(resolve => { release = resolve; });
+    tokenGate = async () => { if (++arrived === 2) release(); await both; };
+    const responses = await Promise.all(browsers.map((b, i) => b.request(flows[i].callback)));
+    expect(responses.map(r => r.status).sort()).toEqual([302, 409]);
+    expect(await count("auth_google_identities")).toBe(1);
+  });
+  it.each(["reset", "logout"])("callback rechecks session locks after concurrent %s during exchange", async mode => {
+    const user = await createVerifiedUser(pool, "racing_local");
+    const b = await browser();
+    await b.request("/auth/login", { login: user.username, password: "fixture-password" });
+    await b.request("/auth/reauthenticate", { password: "fixture-password" });
+    const flow = await b.start(true);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    tokenGate = async () => { entered(); await gate; };
+    const callback = b.request(flow.callback);
+    try {
+      await started;
+      if (mode === "logout") expect((await b.request("/auth/logout", {})).status).toBe(204);
+      else {
+        const auth = new AuthStore(pool);
+        const { token } = await auth.createOneTimeToken(user.id, "reset_password");
+        expect(await auth.consumePasswordResetToken(token, "replacement-password")).toBe(true);
+      }
+    } finally { release(); }
+    expect((await callback).status).toBe(403);
+    expect(await count("auth_google_identities")).toBe(0);
+    expect(await count("auth_sessions")).toBe(0);
+  });
+  it.each(["reset", "logout"])("callback finalization serializes behind an already-waiting %s lock", async mode => {
+    const user = await createVerifiedUser(pool, "locked_local"), auth = new AuthStore(pool);
+    const session = await auth.authenticateLocalUser(user.username, "fixture-password");
+    expect(session).not.toBeNull();
+    await auth.reauthenticateLocalSession(session!.token, "fixture-password", "local");
+    const reset = await auth.createOneTimeToken(user.id, "reset_password");
+    const blocker = await pool.connect();
+    let revoke: Promise<unknown> | undefined, finish: Promise<unknown> | undefined;
+    const waitForLocks = async (minimum: number) => {
+      for (let i=0;i<200;i++) {
+        const result = await admin.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND (query LIKE '%auth_sessions%' OR query LIKE '%app_users%')", [schema]);
+        if (result.rows[0].n >= minimum) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error("Expected finalization/revocation lock wait");
+    };
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(mode === "reset" ? "SELECT id FROM app_users WHERE id=$1 FOR UPDATE" : "SELECT id FROM auth_sessions WHERE user_id=$1 FOR UPDATE", [user.id]);
+      revoke = mode === "reset" ? auth.consumePasswordResetToken(reset.token, "replacement-password") : auth.revokeSession(session!.token);
+      await waitForLocks(1);
+      finish = auth.finishGoogleIdentity({issuer:"https://accounts.google.com",subject:"locked-subject",email:"google@example.test"}, {userId:user.id,sessionHash:createHash("sha256").update(session!.token).digest("hex")});
+      await waitForLocks(2);
+      await blocker.query("COMMIT");
+      await revoke;
+      expect(await finish).toEqual({status:403});
+      expect(await count("auth_google_identities")).toBe(0);
+    } finally { await blocker.query("ROLLBACK"); blocker.release(); await revoke; await finish; }
   });
   it("shares failed reauthentication budgets with local login and rate-limits Google starts", async () => {
     await createVerifiedUser(pool,"local"); const b=await browser();

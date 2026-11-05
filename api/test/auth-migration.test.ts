@@ -51,6 +51,10 @@ describe("safe identity migration", () => {
         VALUES ('field','Legacy field','Valley','History','\\x040506','image/png','field.png');
       INSERT INTO auctions (id,name,source_list_id,battlefield_id,status)
         VALUES ('auction','Legacy battle','list','field','completed');
+      UPDATE auctions SET preparation='{"locked":true,"teams":["team"],"steps":{"battlefield":true}}',
+        background_image='\\x202122', background_mime='image/png', background_name='background.png',
+        battlefield_geography='Overridden valley', battlefield_history='Historical override',
+        battlefield_image='\\x303132', battlefield_image_mime='image/png', battlefield_image_name='override.png';
       CREATE TABLE list_entries (list_id text REFERENCES candidate_lists(id), candidate_id text REFERENCES candidates(id),
         position integer NOT NULL, PRIMARY KEY(list_id,candidate_id), UNIQUE(list_id,position));
       CREATE TABLE auction_entries (auction_id text REFERENCES auctions(id), candidate_id text REFERENCES candidates(id),

@@ -216,8 +216,7 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
 
   app.patch("/lists/:id", async (req, res) => {
     try {
-      const current = await requestStore(res).getList(req.params.id);
-      res.json(await requestStore(res).editList(req.params.id, String(req.body?.name ?? current.name), publicFlag(req.body?.isPublic)));
+      res.json(await requestStore(res).editList(req.params.id, req.body?.name == null ? undefined : String(req.body.name), publicFlag(req.body?.isPublic)));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });

@@ -1,15 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createServer, type Server } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import { PgStore } from "../src/store.js";
 import { AccessError } from "../src/access.js";
 import { buildApp } from "../src/app.js";
-import { fixtureClient, fixtureOrigin, ownedStore } from "./helpers/domain.js";
+import { fixtureClient, fixtureOrigin } from "./helpers/domain.js";
+import { Pool } from "pg";
 import { createVerifiedUser } from "./helpers/auth.js";
 import { randomUUID } from "node:crypto";
 import { addTeamMember, createAuctionTeam } from "../src/domain.js";
+import { AuthStore } from "../src/auth-store.js";
 
 describe("opt-in sharing", () => {
+  const applicationName = `sharing_${randomUUID()}`;
   let a: PgStore, b: PgStore, server: Server;
+  let base: string;
   let request: Awaited<ReturnType<typeof fixtureClient>>;
   const image = { buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]), mime: "image/png", name: "old.png" };
   const fields = { name: "Old field", geography: "Old geography", history: "Old history" };
@@ -17,13 +21,16 @@ describe("opt-in sharing", () => {
     store.saveCandidate(name, image.buffer, image.mime, image.name, isPublic);
 
   beforeEach(async () => {
-    a = await ownedStore(process.env.DATABASE_URL!);
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL!, max: 8, application_name: applicationName });
+    const owner = await createVerifiedUser(pool, `s_${randomUUID().replaceAll("-", "").slice(0, 24)}`);
+    a = new PgStore(pool).forUser(owner.id);
     const user = await createVerifiedUser(a.pool!, `s_${randomUUID().replaceAll("-", "").slice(0, 24)}`);
     b = a.forUser(user.id);
     server = createServer(buildApp(a, { allowedOrigin: fixtureOrigin }));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as { port: number };
-    request = await fixtureClient(`http://127.0.0.1:${address.port}`, b);
+    base = `http://127.0.0.1:${address.port}`;
+    request = await fixtureClient(base, b);
   });
   afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -220,5 +227,116 @@ describe("opt-in sharing", () => {
     expect((await b.editCatalogCandidate(own.id, "Still public", null)).isPublic).toBe(true);
     const field = await b.battlefields.create(fields, image, true);
     expect((await b.battlefields.edit(field.id, fields, null)).isPublic).toBe(true);
+  });
+
+  it("sharing-only PATCH preserves a rename committed before its SQL update", async () => {
+    const list = await b.saveList("Before", false);
+    const original = PgStore.prototype.editList;
+    vi.spyOn(PgStore.prototype, "editList").mockImplementationOnce(async function (this: PgStore, id, name, isPublic) {
+      await original.call(b, id, "Concurrent rename");
+      return original.call(this, id, name, isPublic);
+    });
+    try {
+      const response = await request(`/lists/${list.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isPublic: true }) });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ name: "Concurrent rename", isPublic: true });
+    } finally { vi.restoreAllMocks(); }
+  });
+
+  it("expired session mutations return 401 before multipart parsing so the browser can clear its workspace", async () => {
+    await a.pool!.query("UPDATE auth_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1", [b.userId]);
+    const form = new FormData();
+    form.append("name", "Expired upload");
+    form.append("image", new Blob([image.buffer], { type: image.mime }), image.name);
+    expect((await request("/candidates", { method: "POST", body: form })).status).toBe(401);
+    expect((await request("/lists", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Expired" }) })).status).toBe(401);
+    expect(await b.listCandidates()).toEqual([]);
+    expect(await b.listLists()).toEqual([]);
+  });
+
+  it("rejects a session that expires while multipart bytes are still arriving", async () => {
+    const bootstrap = await fetch(base + "/auth/session");
+    const anonymous = await bootstrap.json();
+    const username = (await a.pool!.query("SELECT username FROM app_users WHERE id=$1", [b.userId])).rows[0].username;
+    const login = await fetch(base + "/auth/login", { method: "POST", headers: { Origin: fixtureOrigin, Cookie: bootstrap.headers.getSetCookie().map(c => c.split(";")[0]).join("; "), "X-CSRF-Token": anonymous.csrfToken, "Content-Type": "application/json" }, body: JSON.stringify({ login: username, password: "fixture-password" }) });
+    const session = await login.json();
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const original = AuthStore.prototype.verifySessionCsrf;
+    vi.spyOn(AuthStore.prototype, "verifySessionCsrf").mockImplementationOnce(async function (this: AuthStore, token, csrf) {
+      const valid = await original.call(this, token, csrf); entered(); return valid;
+    });
+    const stream = httpRequest(base + "/candidates", { method: "POST", headers: { Origin: fixtureOrigin, Cookie: login.headers.getSetCookie().map(c => c.split(";")[0]).join("; "), "X-CSRF-Token": session.csrfToken, "Content-Type": "multipart/form-data; boundary=task11" } });
+    const response = new Promise<number>((resolve, reject) => { stream.on("error", reject); stream.on("response", res => { res.resume(); resolve(res.statusCode!); }); });
+    stream.write('--task11\r\nContent-Disposition: form-data; name="name"\r\n\r\nSlow upload\r\n--task11\r\nContent-Disposition: form-data; name="image"; filename="test.png"\r\nContent-Type: image/png\r\n\r\n');
+    stream.write(image.buffer);
+    try {
+      await ready;
+      await a.pool!.query("UPDATE auth_sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1", [b.userId]);
+      stream.end('\r\n--task11--\r\n');
+      expect(await response).toBe(401);
+      expect(await b.listCandidates()).toEqual([]);
+    } finally { stream.destroy(); vi.restoreAllMocks(); }
+  });
+
+  it.each(["edit", "revoke"])("foreign selection waits for source %s and rechecks visibility after its commit", async mode => {
+    const c = await candidate(a, "Old", true);
+    const target = await b.saveList("Consumer", false);
+    const blocker = await a.pool!.connect();
+    let selection: Promise<unknown> | undefined;
+    let change: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM candidates WHERE id=$1 FOR UPDATE", [c.id]);
+      change = (mode === "edit" ? a.editCatalogCandidate(c.id, "New private version", null, false) : a.archiveCandidate(c.id)).catch(error => error);
+      let editing = false;
+      for (let i = 0; i < 100; i++) {
+        const result = await a.pool!.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%candidates%'", [applicationName]);
+        if (result.rowCount) { editing = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(editing).toBe(true);
+      selection = b.addEntryToList(target.id, c.id).catch(error => error);
+      let waiting = false;
+      for (let i = 0; i < 100; i++) {
+        const result = await a.pool!.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%candidates%FOR SHARE%'", [applicationName]);
+        if (result.rowCount) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      await blocker.query("COMMIT");
+      expect(await change).not.toBeInstanceOf(Error);
+      expect(await selection).toBeInstanceOf(AccessError);
+      expect((await b.getList(target.id)).entries).toEqual([]);
+    } finally { await blocker.query("ROLLBACK"); blocker.release(); await change; await selection; }
+  });
+
+  it.each(["edit", "revoke"])("selection winning the source lock preserves the old reference against %s", async mode => {
+    const c = await candidate(a, "Original", true);
+    const target = await b.saveList("Consumer", false);
+    let entered!: () => void, release!: () => void;
+    const locked = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = PgStore.prototype.getCandidate;
+    vi.spyOn(PgStore.prototype, "getCandidate").mockImplementation(async function (this: PgStore, id, context) {
+      if (this.userId === b.userId && id === c.id && !context) { entered(); await gate; }
+      return original.call(this, id, context);
+    });
+    const selection = b.addEntryToList(target.id, c.id);
+    let change: Promise<unknown> | undefined;
+    try {
+      await locked;
+      change = (mode === "edit" ? a.editCatalogCandidate(c.id, "Later private", null, false) : a.archiveCandidate(c.id)).catch(error => error);
+      let waiting = false;
+      for (let i = 0; i < 100; i++) {
+        const result = await a.pool!.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%candidates%'", [applicationName]);
+        if (result.rowCount) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+    } finally { release(); await selection; await change; vi.restoreAllMocks(); }
+    expect((await b.getCandidate(c.id, { listId: target.id })).name).toBe("Original");
+    expect((await b.getCandidate(c.id, { listId: target.id })).image).toEqual(image.buffer);
+    await expect(b.getCandidate(c.id)).rejects.toBeInstanceOf(AccessError);
   });
 });

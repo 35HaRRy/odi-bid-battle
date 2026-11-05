@@ -410,9 +410,9 @@ export class PgStore {
     }
   }
 
-  async editList(id: string, name: string, isPublic?: boolean): Promise<CandidateListRecord> {
-    if (!name.trim() || name.length > 200) throw new Error("invalid name");
-    const result = await this.q.query("UPDATE candidate_lists SET name=$3, is_public=COALESCE($4,is_public) WHERE id=$1 AND owner_user_id=$2 RETURNING id", [id, this.userId, name, isPublic]);
+  async editList(id: string, name?: string, isPublic?: boolean): Promise<CandidateListRecord> {
+    if (name !== undefined && (!name.trim() || name.length > 200)) throw new Error("invalid name");
+    const result = await this.q.query("UPDATE candidate_lists SET name=COALESCE($3,name), is_public=COALESCE($4,is_public) WHERE id=$1 AND owner_user_id=$2 RETURNING id", [id, this.userId, name, isPublic]);
     if (!result.rows[0]) throw new AccessError();
     return this.getList(id);
   }

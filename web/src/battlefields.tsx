@@ -133,6 +133,7 @@ export function BattlefieldEditor({
 }
 
 export function BattlefieldLibrary({ lang, userId }: { lang: Lang; userId: string }) {
+  const [loadError, setLoadError] = useState(false);
   const [battlefields, setBattlefields] = useState<BattlefieldSummary[]>([]);
   const [includePublic, setIncludePublic] = useState(false);
   const [query, setQuery] = useState("");
@@ -151,7 +152,7 @@ export function BattlefieldLibrary({ lang, userId }: { lang: Lang; userId: strin
 
   useEffect(() => {
     let live = true;
-    api.battlefields(includePublic).then(list => { if (live) setBattlefields(list); }).catch(() => { if (live) setError(t(lang, "persistFail")); });
+    api.battlefields(includePublic).then(list => { if (live) { setBattlefields(list); setLoadError(false); } }).catch(() => { if (live) setLoadError(true); });
     return () => { live = false; };
   }, [includePublic, lang]);
 
@@ -184,6 +185,7 @@ export function BattlefieldLibrary({ lang, userId }: { lang: Lang; userId: strin
       </div>
 
       {error && <div style={{ color: "var(--red)", marginBottom: "16px" }}>{error}</div>}
+      {loadError && <p role="alert">{t(lang, "persistFail")}</p>}
 
       {filtered.length === 0 ? (
         <p style={{ color: "var(--muted)", fontStyle: "italic" }}>{t(lang, "noBattlefields")}</p>
@@ -275,6 +277,7 @@ export function BattlefieldPreparation({
   const [battlefields, setBattlefields] = useState<BattlefieldSummary[]>([]);
   const [includePublic, setIncludePublic] = useState(false);
   const [draft, setDraft] = useState<DraftBattlefield | null>(null);
+  const [loadError, setLoadError] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [textError, setTextError] = useState<string | null>(null);
@@ -359,8 +362,9 @@ export function BattlefieldPreparation({
         const list = await api.battlefields(includePublic);
         if (!live) return;
         setBattlefields(list);
+        setLoadError(false);
       } catch {
-        if (live) setError(t(lang, "persistFail"));
+        if (live) setLoadError(true);
       }
     })();
     return () => {
@@ -484,6 +488,7 @@ export function BattlefieldPreparation({
         <p style={{ color: "var(--muted)", fontSize: "13px" }}>{t(lang, "battleSubtitle")}</p>
       </div>
       {error && <div style={{ color: "var(--red)", marginBottom: "12px" }}>{error}</div>}
+      {loadError && <p role="alert">{t(lang, "persistFail")}</p>}
       <PublicFilter lang={lang} checked={includePublic} onChange={setIncludePublic} />
       <div className="battle-layout">
         <div

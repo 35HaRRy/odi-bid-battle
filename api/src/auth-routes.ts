@@ -41,6 +41,7 @@ export function mountAuthSecurity(app: Express, auth: AuthStore, config: AuthCon
     res.locals.user = token ? await auth.resolveSession(token) : null;
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       if (req.get("Origin") !== config.allowedOrigin) return error(res, 403, "Forbidden");
+      if (token && !res.locals.user) return error(res, 401, "Authentication required");
       const csrf = req.get("X-CSRF-Token") ?? "";
       if (!/^[A-Za-z0-9_-]{43}$/.test(csrf)) return error(res, 403, "Forbidden");
       if (res.locals.user) {
