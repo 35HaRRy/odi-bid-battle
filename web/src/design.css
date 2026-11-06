@@ -679,6 +679,11 @@ img {
     flex: 1
 }
 
+.clear-list-selection {
+    margin-inline-start: auto;
+    flex-shrink: 0
+}
+
 .source {
     font-size: 11px;
     color: var(--muted);
@@ -2798,4 +2803,42 @@ dialog .description {
 
 .member-columns {
     align-items: end
+}
+
+.account-shell {
+    width: min(100% - 32px, 480px);
+    margin: 32px auto 64px;
+}
+.account-brand {
+    display: block;
+    width: fit-content;
+    margin: 0 auto 24px;
+}
+.account-brand img { display: block; border-radius: 50%; }
+.account-panel {
+    padding: 28px;
+    background: var(--page);
+    border: 1px solid var(--line);
+}
+.account-panel h1 { font-size: 28px; margin-bottom: 8px; }
+.account-panel p { margin-bottom: 16px; }
+.account-panel form { display: grid; gap: 16px; margin: 24px 0 16px; }
+.account-panel label { display: grid; gap: 6px; font-weight: 600; }
+.account-panel input { width: 100%; min-width: 0; padding: 10px; color: var(--ink); background: var(--page); border: 1px solid var(--muted); }
+.account-panel small, .account-note { color: var(--muted); font-weight: 400; }
+.account-panel button { padding: 9px 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); }
+.account-panel .account-action { padding: 6px 10px; }
+.account-panel .primary { color: var(--page); background: var(--green); border-color: var(--green); }
+/* shortcut: font subset covers the two Google button labels; regenerate if translations change. */
+@font-face { font-family: "Google Sans"; src: url("/google-sans-medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+.account-google { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 40px; padding: 10px 12px; border: 1px solid #747775; border-radius: 4px; background: #fff; color: #1f1f1f; text-decoration: none; font: 500 14px/20px "Google Sans", Arial, sans-serif; margin-bottom: 16px; }
+.account-google img { flex: none; }
+.account-google:hover { background: #f8faff; }
+.account-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.account-links .account-action { flex: 1 1 0; min-width: 0; }
+.account-panel .account-resend { display: flex; width: 100%; }
+.account-error { color: var(--red); padding: 12px; }
+@media (max-width: 480px) {
+    .account-panel { padding: 20px; }
+    .account-resend { font-size: 11px; gap: 6px; }
 }

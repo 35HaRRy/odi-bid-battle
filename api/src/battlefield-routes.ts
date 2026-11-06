@@ -1,8 +1,9 @@
 import express from "express";
+import { sendAsset } from "./asset-response.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PgStore } from "./store.js";
+import { AccessError, requestStore, publicFlag } from "./access.js";
 import { AssetError } from "./battlefield-domain.js";
 import { isMulterFileSizeError, uploadSingle } from "./upload.js";
 import { PayloadTooLargeError } from "./limits.js";
@@ -32,7 +33,8 @@ export function loadDefaultBackground(): { buffer: Buffer; mime: string } {
   };
 }
 
-export function assetErrorHttp(err: AssetError): { status: number; body: string } {
+export function assetErrorHttp(err: AssetError | AccessError): { status: number; body: string } {
+  if (err instanceof AccessError) return { status: 404, body: "not found" };
   switch (err.code) {
     case "invalid name":
     case "invalid geography":
@@ -64,7 +66,7 @@ function handleMulterError(err: unknown, res: express.Response): boolean {
   return false;
 }
 
-export function mountBattlefieldRoutes(app: express.Express, store: PgStore): void {
+export function mountBattlefieldRoutes(app: express.Express): void {
   // POST /battlefields
   app.post("/battlefields", (req, res) => {
     uploadSingle("image")(req, res, async (err) => {
@@ -76,9 +78,10 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
         const { name = "", geography = "", history = "" } = req.body ?? {};
         const file = req.file;
         if (!file) return res.status(400).json({ error: "image required" });
-        const rec = await store.battlefields.create(
+        const rec = await requestStore(res).battlefields.create(
           { name: String(name), geography: String(geography), history: String(history) },
-          { buffer: file.buffer, mime: file.mimetype, name: file.originalname }
+          { buffer: file.buffer, mime: file.mimetype, name: file.originalname },
+          publicFlag(req.body?.isPublic)
         );
         const summary = {
           id: rec.id,
@@ -86,10 +89,11 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
           geography: rec.geography,
           history: rec.history,
           archivedAt: rec.archivedAt,
+          ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
         };
         res.status(201).json(summary);
       } catch (e) {
-        if (e instanceof AssetError) {
+        if (e instanceof AssetError || e instanceof AccessError) {
           const h = assetErrorHttp(e);
           return res.status(h.status).json({ error: h.body });
         }
@@ -101,9 +105,9 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   });
 
   // GET /battlefields
-  app.get("/battlefields", async (_req, res) => {
+  app.get("/battlefields", async (req, res) => {
     try {
-      const list = await store.battlefields.list();
+      const list = await requestStore(res).battlefields.list(req.query.includePublic === "true");
       res.json(list);
     } catch (e) {
       res.status(500).json({ error: "persistence failed" });
@@ -113,17 +117,18 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // GET /battlefields/:id
   app.get("/battlefields/:id", async (req, res) => {
     try {
-      const rec = await store.battlefields.get(req.params.id);
+      const rec = await requestStore(res).battlefields.get(req.params.id);
       const summary = {
         id: rec.id,
         name: rec.name,
         geography: rec.geography,
         history: rec.history,
         archivedAt: rec.archivedAt,
+        ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
       };
       res.json(summary);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -134,13 +139,10 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // GET /battlefields/:id/image
   app.get("/battlefields/:id/image", async (req, res) => {
     try {
-      const rec = await store.battlefields.get(req.params.id);
-      res.setHeader("Content-Type", rec.image.mime || "image/png");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(rec.image.buffer);
+      const rec = await requestStore(res).battlefields.get(req.params.id);
+      sendAsset(res, rec.image);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -161,10 +163,11 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
         const imageInput = file
           ? { buffer: file.buffer, mime: file.mimetype, name: file.originalname }
           : null;
-        const rec = await store.battlefields.edit(
+        const rec = await requestStore(res).battlefields.edit(
           req.params.id,
           { name: String(name), geography: String(geography), history: String(history) },
-          imageInput
+          imageInput,
+          publicFlag(req.body?.isPublic)
         );
         res.setHeader("Cache-Control", "no-store");
         res.json({
@@ -173,9 +176,10 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
           geography: rec.geography,
           history: rec.history,
           archivedAt: rec.archivedAt,
+          ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
         });
       } catch (e) {
-        if (e instanceof AssetError) {
+        if (e instanceof AssetError || e instanceof AccessError) {
           const h = assetErrorHttp(e);
           return res.status(h.status).json({ error: h.body });
         }
@@ -187,11 +191,11 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // POST /battlefields/:id/archive
   app.post("/battlefields/:id/archive", async (req, res) => {
     try {
-      await store.battlefields.archive(req.params.id);
+      await requestStore(res).battlefields.archive(req.params.id);
       res.setHeader("Cache-Control", "no-store");
       res.json({ ok: true });
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -202,12 +206,12 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // GET /auctions/:id/battlefield (merged shared record + draft overrides)
   app.get("/auctions/:id/battlefield", async (req, res) => {
     try {
-      const draft = await store.battlefields.getDraftBattlefield(req.params.id);
+      const draft = await requestStore(res).battlefields.getDraftBattlefield(req.params.id);
       if (!draft) return res.status(404).json({ error: "battlefield not found" });
       res.setHeader("Cache-Control", "no-store");
       res.json(draft);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -227,7 +231,7 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
         if (geography === undefined && history === undefined && !req.file) {
           return res.status(400).json({ error: "invalid geography" });
         }
-        const current = await store.battlefields.getDraftBattlefield(req.params.id);
+        const current = await requestStore(res).battlefields.getDraftBattlefield(req.params.id);
         if (!current) return res.status(404).json({ error: "battlefield not found" });
         const next = {
           geography: geography !== undefined ? String(geography) : current.geography,
@@ -236,11 +240,11 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
         const imageInput = req.file
           ? { buffer: req.file.buffer, mime: req.file.mimetype, name: req.file.originalname }
           : undefined;
-        const updated = await store.battlefields.saveDraftBattlefield(req.params.id, next, imageInput);
+        const updated = await requestStore(res).battlefields.saveDraftBattlefield(req.params.id, next, imageInput);
         res.setHeader("Cache-Control", "no-store");
         res.json(updated);
       } catch (e) {
-        if (e instanceof AssetError) {
+        if (e instanceof AssetError || e instanceof AccessError) {
           const h = assetErrorHttp(e);
           return res.status(h.status).json({ error: h.body });
         }
@@ -252,13 +256,10 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // GET /auctions/:id/battlefield/image (custom override or shared record)
   app.get("/auctions/:id/battlefield/image", async (req, res) => {
     try {
-      const image = await store.battlefields.getDraftBattlefieldImage(req.params.id);
-      res.setHeader("Content-Type", image.mime || "image/png");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(image.buffer);
+      const image = await requestStore(res).battlefields.getDraftBattlefieldImage(req.params.id);
+      sendAsset(res, image);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -276,7 +277,7 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
       try {
         const file = req.file;
         if (!file) return res.status(400).json({ error: "image required" });
-        await store.battlefields.setBackground(req.params.id, {
+        await requestStore(res).battlefields.setBackground(req.params.id, {
           buffer: file.buffer,
           mime: file.mimetype,
           name: file.originalname,
@@ -284,7 +285,7 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
         res.setHeader("Cache-Control", "no-store");
         res.json({ ok: true });
       } catch (e) {
-        if (e instanceof AssetError) {
+        if (e instanceof AssetError || e instanceof AccessError) {
           const h = assetErrorHttp(e);
           return res.status(h.status).json({ error: h.body });
         }
@@ -296,11 +297,11 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // DELETE /auctions/:id/background
   app.delete("/auctions/:id/background", async (req, res) => {
     try {
-      await store.battlefields.setBackground(req.params.id, null);
+      await requestStore(res).battlefields.setBackground(req.params.id, null);
       res.setHeader("Cache-Control", "no-store");
       res.json({ ok: true });
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -311,20 +312,14 @@ export function mountBattlefieldRoutes(app: express.Express, store: PgStore): vo
   // GET /auctions/:id/background
   app.get("/auctions/:id/background", async (req, res) => {
     try {
-      const bg = await store.battlefields.getBackground(req.params.id);
+      const bg = await requestStore(res).battlefields.getBackground(req.params.id);
       if (bg) {
-        res.setHeader("Content-Type", bg.mime);
-        res.setHeader("X-Content-Type-Options", "nosniff");
-        res.setHeader("Cache-Control", "no-store");
-        return res.send(bg.buffer);
+        return sendAsset(res, bg);
       }
       const def = loadDefaultBackground();
-      res.setHeader("Content-Type", def.mime);
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(def.buffer);
+      sendAsset(res, def, true);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }

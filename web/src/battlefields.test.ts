@@ -26,6 +26,9 @@ describe("battlefield client and i18n", () => {
       "changeImage",
       "editTexts",
       "selectedBattlefield",
+      "includePublic",
+      "shareRecord",
+      "sharedRecord",
     ]) {
       expect(t("tr", key)).not.toBe(key);
       expect(t("en", key)).not.toBe(key);

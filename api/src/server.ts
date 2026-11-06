@@ -1,4 +1,4 @@
-import { buildApp } from "./app.js";
+import { buildApp, loadAuthConfig } from "./app.js";
 import { PgStore } from "./store.js";
 
 // Standalone entry point for local development (`npm run dev -w api`) and
@@ -10,7 +10,8 @@ const DATABASE_URL =
   "postgres://bidbattle:bidbattle@localhost:5433/bidbattle";
 
 if (process.env.VITEST !== "true") {
+  const config = loadAuthConfig();
   const store = await PgStore.connect(DATABASE_URL);
-  const app = buildApp(store);
+  const app = buildApp(store, { config });
   app.listen(PORT, () => console.log(`api on :${PORT}`));
 }

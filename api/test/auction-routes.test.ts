@@ -2,16 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
 import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
+import { fixtureFetch, fixtureOrigin, ownedStore } from "./helpers/domain.js";
 
 describe.sequential("DELETE /auctions/:id", () => {
   let store: PgStore; let server: Server; let base: string;
+  let fetch: Awaited<ReturnType<typeof fixtureFetch>>;
   beforeEach(async () => {
-    store = await PgStore.connect(process.env.DATABASE_URL ?? "postgres://bidbattle:bidbattle@localhost:5433/bidbattle");
-    const app = buildApp(store);
+    store = await ownedStore(process.env.DATABASE_URL!);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const addr = server.address();
     if (addr && typeof addr === "object") base = `http://127.0.0.1:${addr.port}`;
+    fetch = await fixtureFetch(base, store);
   });
   afterEach(async () => {
     await new Promise<void>((r) => server.close(() => r()));
@@ -33,13 +36,15 @@ describe.sequential("DELETE /auctions/:id", () => {
 
 describe.sequential("POST /auctions/:id/clone", () => {
   let store: PgStore; let server: Server; let base: string;
+  let fetch: Awaited<ReturnType<typeof fixtureFetch>>;
   beforeEach(async () => {
-    store = await PgStore.connect(process.env.DATABASE_URL ?? "postgres://bidbattle:bidbattle@localhost:5433/bidbattle");
-    const app = buildApp(store);
+    store = await ownedStore(process.env.DATABASE_URL!);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const addr = server.address();
     if (addr && typeof addr === "object") base = `http://127.0.0.1:${addr.port}`;
+    fetch = await fixtureFetch(base, store);
   });
   afterEach(async () => {
     await new Promise<void>((r) => server.close(() => r()));

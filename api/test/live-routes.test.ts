@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
 import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
+import { fixtureFetch, fixtureOrigin, ownedStore } from "./helpers/domain.js";
 import { addTeamMember, createAuctionTeam } from "../src/domain.js";
 
 const DATABASE_URL =
@@ -17,11 +18,12 @@ describe.sequential("live bidding routes", () => {
   let store: PgStore;
   let server: Server;
   let base: string;
+  let fetch: Awaited<ReturnType<typeof fixtureFetch>>;
   let auctionId: string;
   let firstCandidate: string;
 
   beforeEach(async () => {
-    store = await PgStore.connect(DATABASE_URL);
+    store = await ownedStore(DATABASE_URL);
     const ids: string[] = [];
     for (let i = 0; i < 4; i++) {
       const c = await store.saveCandidate(`Aday ${i}`, PNG, "image/png", `a${i}.png`);
@@ -45,11 +47,12 @@ describe.sequential("live bidding routes", () => {
     await store.startAuction(auction.id);
     auctionId = auction.id;
 
-    const app = buildApp(store);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const addr = server.address();
     if (addr && typeof addr === "object") base = `http://127.0.0.1:${addr.port}`;
+    fetch = await fixtureFetch(base, store);
   });
 
   afterEach(async () => {

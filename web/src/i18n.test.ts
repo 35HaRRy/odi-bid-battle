@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getLang, t } from "./i18n";
+import { getLang, setLang, t } from "./i18n";
 
 describe("i18n", () => {
   it("defaults to Turkish", () => {
@@ -15,5 +15,16 @@ describe("i18n", () => {
   it("supports English without translating user names", () => {
     expect(t("en", "catalog")).toBe("Candidate Catalog");
     expect(t("en", "no-such-key-xyz")).toBe("no-such-key-xyz");
+  });
+  it("notifies account and workspace navigation when language changes", () => {
+    const events = new EventTarget();
+    const listener = vi.fn();
+    events.addEventListener("obb-language", listener);
+    vi.stubGlobal("window", events);
+    vi.stubGlobal("localStorage", { setItem: () => {} });
+    try {
+      setLang("en");
+      expect(listener).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
   });
 });

@@ -1,5 +1,7 @@
 import express from "express";
+import { sendAsset } from "./asset-response.js";
 import { PgStore } from "./store.js";
+import { AccessError, requestStore } from "./access.js";
 import { AssetError, validateAssetImage } from "./battlefield-domain.js";
 import { assetErrorHttp } from "./battlefield-routes.js";
 import type { AuctionTeam } from "./domain.js";
@@ -78,7 +80,8 @@ async function resolveImage(
         return null;
       }
       return checkedImage({ buffer: upload.buffer, mime: upload.mime, name: upload.name }, path, errors);
-    } catch {
+    } catch (error) {
+      if (error instanceof AccessError) throw error;
       errors.push({ path, message: "invalid image" });
       return null;
     }
@@ -93,6 +96,9 @@ async function resolveImage(
   if (reuseKey) {
     const found = opts.existing.get(reuseKey);
     if (!found) {
+      // Check the actor's scope before reporting a same-owner parent mismatch.
+      if (reuseKey.startsWith("team:")) await opts.store.teams.getTeamFlagImage(String(payload.teamId));
+      else await opts.store.teams.getMemberAvatarImage(String(payload.memberId));
       errors.push({ path, message: "invalid image" });
       return null;
     }
@@ -253,23 +259,20 @@ function sendImage(res: express.Response, image: { buffer: Buffer; mime: string;
     res.status(404).json({ error: "image not found" });
     return;
   }
-  res.setHeader("Content-Type", image.mime || "image/png");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Cache-Control", "no-store");
-  res.send(image.buffer);
+  sendAsset(res, image);
 }
 
-export function mountTeamRoutes(app: express.Express, store: PgStore): void {
+export function mountTeamRoutes(app: express.Express): void {
   app.get("/auctions/:id/teams", async (req, res) => {
     try {
-      const teams = await store.teams.getAuctionTeams(req.params.id);
+      const teams = await requestStore(res).teams.getAuctionTeams(req.params.id);
       const body = serializeTeamSummaries(req.params.id, teams);
       if (jsonUtf8Bytes(body) > REQUEST_BODY_BUDGET_BYTES) {
         return res.status(413).json({ error: "response too large" });
       }
       res.json(body);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -292,7 +295,7 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
       try {
         const file = req.file;
         if (!file) return res.status(400).json({ error: "image required" });
-        const saved = await store.teams.saveTeamImageUpload(req.params.id, {
+        const saved = await requestStore(res).teams.saveTeamImageUpload(req.params.id, {
           buffer: file.buffer,
           mime: file.mimetype,
           name: file.originalname,
@@ -305,7 +308,7 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
           url: `/auctions/${req.params.id}/team-images/${saved.id}/image`,
         });
       } catch (e) {
-        if (e instanceof AssetError) {
+        if (e instanceof AssetError || e instanceof AccessError) {
           const h = assetErrorHttp(e);
           // "invalid image" maps to 400 via assetErrorHttp; unknown codes fall
           // through to persistence failure below.
@@ -327,7 +330,7 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
 
   app.get("/auctions/:id/team-images/:uploadId/image", async (req, res) => {
     try {
-      const upload = await store.teams.getTeamImageUpload(req.params.uploadId);
+      const upload = await requestStore(res).teams.getTeamImageUpload(req.params.uploadId);
       if (upload.auctionId !== req.params.id) return res.status(404).json({ error: "image not found" });
       sendImage(res, { buffer: upload.buffer, mime: upload.mime, name: upload.name });
     } catch {
@@ -337,13 +340,13 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
 
   app.get("/auctions/:id/teams/:teamId/flag", async (req, res) => {
     try {
-      const teams = await store.teams.getAuctionTeams(req.params.id);
+      const teams = await requestStore(res).teams.getAuctionTeams(req.params.id);
       if (!teams.some((team) => team.id === req.params.teamId)) {
         return res.status(404).json({ error: "image not found" });
       }
-      sendImage(res, await store.teams.getTeamFlagImage(req.params.teamId));
+      sendImage(res, await requestStore(res).teams.getTeamFlagImage(req.params.teamId));
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -353,14 +356,14 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
 
   app.get("/auctions/:id/teams/:teamId/members/:memberId/avatar", async (req, res) => {
     try {
-      const teams = await store.teams.getAuctionTeams(req.params.id);
+      const teams = await requestStore(res).teams.getAuctionTeams(req.params.id);
       const team = teams.find((t) => t.id === req.params.teamId);
       if (!team || !team.members.some((m) => m.id === req.params.memberId)) {
         return res.status(404).json({ error: "image not found" });
       }
-      sendImage(res, await store.teams.getMemberAvatarImage(req.params.memberId));
+      sendImage(res, await requestStore(res).teams.getMemberAvatarImage(req.params.memberId));
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }
@@ -371,10 +374,11 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
   app.post("/auctions/:id/teams", async (req, res) => {
     try {
       const raw = req.body?.teams;
+      await requestStore(res).getAuction(req.params.id);
       if (!Array.isArray(raw) || raw.length !== 2) {
         return res.status(400).json({ error: "exactly two teams are required" });
       }
-      const { teams, errors, uploadIds } = await parseTeams(store, req.params.id, req.body);
+      const { teams, errors, uploadIds } = await parseTeams(requestStore(res), req.params.id, req.body);
       if (errors.length > 0) {
         return res.status(400).json({ error: "invalid teams", fieldErrors: errors });
       }
@@ -384,11 +388,11 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
       // response below is lightweight summaries. Oversized legacy inline
       // base64 payloads are still caught by the global JSON body budget in
       // app.ts before this handler runs.
-      const saved = await store.teams.saveAuctionTeams(req.params.id, teams);
+      const saved = await requestStore(res).teams.saveAuctionTeams(req.params.id, teams);
       // Consumed staged uploads are deleted best-effort; expiry pruning
       // happens on upload, so a failed delete never blocks the save.
       if (uploadIds.length > 0) {
-        await store.teams.deleteTeamImageUploads([...new Set(uploadIds)]).catch(() => undefined);
+        await requestStore(res).teams.deleteTeamImageUploads([...new Set(uploadIds)]).catch(() => undefined);
       }
       const body = serializeTeamSummaries(req.params.id, saved);
       if (jsonUtf8Bytes(body) > REQUEST_BODY_BUDGET_BYTES) {
@@ -396,7 +400,7 @@ export function mountTeamRoutes(app: express.Express, store: PgStore): void {
       }
       res.json(body);
     } catch (e) {
-      if (e instanceof AssetError) {
+      if (e instanceof AssetError || e instanceof AccessError) {
         const h = assetErrorHttp(e);
         return res.status(h.status).json({ error: h.body });
       }

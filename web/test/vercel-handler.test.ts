@@ -53,22 +53,30 @@ async function start() {
 }
 
 describe("Vercel entrypoint", () => {
-  it("shares initialization and serves existing Express routes", async () => {
+  it("shares initialization, serves health and protects domain routes", async () => {
     const { connect } = await start();
     const responses = await Promise.all([
       fetch(`${base}/api/health?check=1`), fetch(`${base}/api/candidates`),
     ]);
     expect(await responses[0].json()).toEqual({ ok: true });
-    expect(await responses[1].json()).toEqual([]);
+    expect(responses[1].status).toBe(401);
+    expect(await responses[1].json()).toEqual({ error: "authentication required" });
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps unknown API paths JSON for all supported methods", async () => {
+  it("checks CSRF and authentication before unknown API paths for all supported methods", async () => {
     await start();
+    const origin = "http://localhost:5173";
+    const bootstrap = await fetch(`${base}/api/auth/session`, { headers: { Origin: origin } });
+    const { csrfToken } = await bootstrap.json();
+    const cookie = bootstrap.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
     for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
-      const response = await fetch(`${base}/api/missing?x=1`, { method });
-      expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: "not found" });
+      if (method !== "GET") {
+        expect((await fetch(`${base}/api/missing?x=1`, { method })).status).toBe(403);
+      }
+      const response = await fetch(`${base}/api/missing?x=1`, { method, headers: { Origin: origin, Cookie: cookie, "X-CSRF-Token": csrfToken } });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: "authentication required" });
     }
   });
 

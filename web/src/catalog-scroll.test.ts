@@ -7,7 +7,7 @@ import {
 import type { Candidate } from "./api";
 
 function cand(id: string, name: string): Candidate {
-  return { id, name } as Candidate;
+  return { id, name, ownerUserId: "user", isOwner: true, isPublic: false };
 }
 
 describe("catalog scroll after new record", () => {

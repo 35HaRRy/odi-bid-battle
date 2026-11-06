@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AssetError } from "../src/battlefield-domain.js";
 import { BattlefieldStore } from "../src/battlefield-store.js";
 import { PersistenceError, PgStore } from "../src/store.js";
+import { AccessError } from "../src/access.js";
+import { createVerifiedUser } from "./helpers/auth.js";
 
 const connectionString = process.env.DATABASE_URL
   ?? "postgres://bidbattle:bidbattle@localhost:5433/bidbattle";
@@ -31,8 +33,9 @@ beforeEach(async () => {
   isolatedUrl.searchParams.set("application_name", schema);
   pool = new Pool({ connectionString: isolatedUrl.toString() });
   await pool.query(schemaSql);
-  store = new PgStore(pool);
-  assets = new BattlefieldStore(pool);
+  const fixtureUser = await createVerifiedUser(pool, "battlefield_owner");
+  store = new PgStore(pool).forUser(fixtureUser.id);
+  assets = new BattlefieldStore(pool, fixtureUser.id);
 });
 
 afterEach(async () => {
@@ -72,9 +75,21 @@ describe("battlefield persistence", () => {
     const original = await assets.create(fields, image);
     const revised = { ...fields, name: " Revised ", geography: " Hill ", history: " New " };
     expect(await assets.edit(original.id, revised, null)).toEqual({
+      ...original,
       id: original.id, name: "Revised", geography: "Hill", history: "New", archivedAt: null, image,
     });
     expect(await assets.edit(original.id, fields, secondImage)).toEqual({ ...original, image: secondImage });
+  });
+
+  it("preserves sharing when a referenced battlefield is replaced and retains the selected version", async () => {
+    const original = await assets.create(fields, image, true);
+    const draft = await store.saveAuction("Consumer", null);
+    await assets.select(draft.id, original.id);
+    const replacement = await assets.edit(original.id, { ...fields, name: "Replacement" }, null);
+    expect(replacement.isPublic).toBe(true);
+    expect(replacement.id).not.toBe(original.id);
+    expect((await assets.getDraftBattlefield(draft.id))?.name).toBe(original.name);
+    expect((await assets.getDraftBattlefieldImage(draft.id)).buffer).toEqual(image.buffer);
   });
 
   it("lists only active summaries but retrieves archived records directly", async () => {
@@ -91,12 +106,12 @@ describe("battlefield persistence", () => {
   it("rejects unknown battlefield and auction identifiers", async () => {
     const field = await assets.create(fields, image);
     const draft = await store.saveAuction("Draft", null);
-    await expect(assets.get("missing")).rejects.toEqual(new AssetError("battlefield not found"));
-    await expect(assets.edit("missing", fields, null)).rejects.toEqual(new AssetError("battlefield not found"));
-    await expect(assets.archive("missing")).rejects.toEqual(new AssetError("battlefield not found"));
-    await expect(assets.select(draft.id, "missing")).rejects.toEqual(new AssetError("battlefield not found"));
-    await expect(assets.select("missing", field.id)).rejects.toEqual(new AssetError("auction not found"));
-    await expect(assets.select("missing", null)).rejects.toEqual(new AssetError("auction not found"));
+    await expect(assets.get("missing")).rejects.toBeInstanceOf(AccessError);
+    await expect(assets.edit("missing", fields, null)).rejects.toBeInstanceOf(AccessError);
+    await expect(assets.archive("missing")).rejects.toBeInstanceOf(AccessError);
+    await expect(assets.select(draft.id, "missing")).rejects.toBeInstanceOf(AccessError);
+    await expect(assets.select("missing", field.id)).rejects.toBeInstanceOf(AccessError);
+    await expect(assets.select("missing", null)).rejects.toBeInstanceOf(AccessError);
   });
 
   it("allows existing archived selection but rejects new archived selection", async () => {
@@ -241,14 +256,14 @@ describe("battlefield persistence", () => {
     expect((await store.setAuctionBattlefield(draft.id, field.id)).battlefieldId).toBe(field.id);
     await store.battlefields.archive(field.id);
     await expect(store.battlefields.edit(field.id, fields, null)).rejects.toBeInstanceOf(AssetError);
-    await expect(store.setAuctionBattlefield(draft.id, "missing")).rejects.toBeInstanceOf(AssetError);
+    await expect(store.setAuctionBattlefield(draft.id, "missing")).rejects.toBeInstanceOf(AccessError);
     await pool.query("ALTER TABLE battlefields RENAME TO unavailable_battlefields");
     await expect(store.battlefields.list()).rejects.toBeInstanceOf(PersistenceError);
     await expect(store.setAuctionBattlefield(draft.id, field.id)).rejects.toBeInstanceOf(PersistenceError);
   });
 
   it("keeps query-only mock PgStore construction supported", async () => {
-    const mock = new PgStore({ query: async () => { throw new Error("offline"); } });
+    const mock = new PgStore({ query: async () => { throw new Error("offline"); } }).forUser(store.userId);
     await expect(mock.listAuctions()).rejects.toBeInstanceOf(PersistenceError);
     await expect(mock.setAuctionBattlefield("draft", null)).rejects.toBeInstanceOf(PersistenceError);
     await mock.close();
@@ -268,7 +283,7 @@ describe("background persistence", () => {
         returnedColumns.push(result.fields.map((field) => field.name));
         return result;
       },
-    });
+    }).forUser(store.userId);
     expect(await metadataStore.getAuction(draft.id)).toEqual(draft);
     expect(await metadataStore.listAuctions()).toEqual([draft]);
     for (const columns of returnedColumns) {
@@ -285,7 +300,7 @@ describe("background persistence", () => {
     const other = await store.saveAuction("Other", null);
     expect(await assets.getBackground(draft.id)).toBeNull();
     await assets.setBackground(draft.id, image);
-    expect(await new BattlefieldStore(pool).getBackground(draft.id)).toEqual(image);
+    expect(await new BattlefieldStore(pool, store.userId).getBackground(draft.id)).toEqual(image);
     expect(await assets.getBackground(other.id)).toBeNull();
     expect(await store.getAuction(draft.id)).toEqual(draft);
     await assets.setBackground(draft.id, secondImage);
@@ -297,8 +312,8 @@ describe("background persistence", () => {
   });
 
   it("rejects missing auctions, invalid images and locked background writes", async () => {
-    await expect(assets.getBackground("missing")).rejects.toEqual(new AssetError("auction not found"));
-    await expect(assets.setBackground("missing", null)).rejects.toEqual(new AssetError("auction not found"));
+    await expect(assets.getBackground("missing")).rejects.toBeInstanceOf(AccessError);
+    await expect(assets.setBackground("missing", null)).rejects.toBeInstanceOf(AccessError);
     const draft = await store.saveAuction("Draft", null);
     await expect(assets.setBackground(draft.id, { ...image, buffer: Buffer.alloc(0) })).rejects.toEqual(new AssetError("image required"));
     await assets.setBackground(draft.id, image);
@@ -422,8 +437,8 @@ describe("battlefield migration", () => {
     expect((await store.getAuction(draft.id)).battlefieldId).toBe("legacy-missing");
     expect((await pool.query("SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name='auctions' AND column_name='background_image'", [schema])).rows).toEqual([]);
     // Supply the missing record, never clear the legacy reference.
-    await pool.query("INSERT INTO battlefields (id,name,geography,history,image,image_mime,image_name) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      ["legacy-missing", fields.name, fields.geography, fields.history, image.buffer, image.mime, image.name]);
+    await pool.query("INSERT INTO battlefields (id,name,geography,history,image,image_mime,image_name,owner_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      ["legacy-missing", fields.name, fields.geography, fields.history, image.buffer, image.mime, image.name, store.userId]);
     await pool.query(schemaSql);
     await pool.query(schemaSql);
     expect((await store.getAuction(draft.id)).battlefieldId).toBe("legacy-missing");

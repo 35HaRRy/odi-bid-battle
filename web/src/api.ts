@@ -1,40 +1,8 @@
 import { isFileTooLarge, isJsonTooLarge } from "./limits";
-
-const BASE =
-  (import.meta as unknown as { env: Record<string, string> }).env
-    .VITE_API_URL ?? "http://localhost:3001";
-
-export class ApiError extends Error {
-  status: number;
-  details: unknown;
-  constructor(status: number, message: string, details?: unknown) {
-    super(message);
-    this.status = status;
-    this.details = details;
-  }
-}
-
-async function check(res: Response): Promise<Response> {
-  if (!res.ok) {
-    // The platform can reject over-budget bodies before the app runs and
-    // answers with a non-JSON (HTML/text) 413. Surface that as the same
-    // friendly payload error the backend returns.
-    const body = await res.json().catch(() => null);
-    if (body && typeof body === "object") {
-      throw new ApiError(
-        res.status,
-        (body as { error?: string }).error ?? `http ${res.status}`,
-        body,
-      );
-    }
-    if (res.status === 413) {
-      throw new ApiError(res.status, "payload too large", null);
-    }
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text || `http ${res.status}`, null);
-  }
-  return res;
-}
+import { API_BASE as BASE, ApiError, apiRequest } from "./api-transport";
+import type { AuctionStatistics, StatisticsOverview } from "../../api/src/statistics-types";
+export type { AuctionStatistics, StatisticsOverview } from "../../api/src/statistics-types";
+export { ApiError, apiRequest, setSessionCsrf, subscribeUnauthorized } from "./api-transport";
 
 function assertFileBudget(file: File | null | undefined): void {
   if (isFileTooLarge(file)) {
@@ -48,11 +16,18 @@ function assertJsonBudget(value: unknown): void {
   }
 }
 
-export interface Candidate {
+export interface Visibility {
+  ownerUserId: string;
+  isOwner: boolean;
+  isPublic: boolean;
+}
+export type CandidateContext = { listId: string; auctionId?: never } | { auctionId: string; listId?: never };
+
+export interface Candidate extends Visibility {
   id: string;
   name: string;
 }
-export interface CandidateList {
+export interface CandidateList extends Visibility {
   id: string;
   name: string;
   isDraft: boolean;
@@ -68,7 +43,7 @@ export interface Auction {
   simulationPromptTemplate: string;
   status: string;
 }
-export interface BattlefieldSummary {
+export interface BattlefieldSummary extends Visibility {
   id: string;
   name: string;
   geography: string;
@@ -191,10 +166,11 @@ export interface LiveState {
   teams: LiveTeam[];
 }
 
-function editForm(name: string, file: File | null): FormData {
+function editForm(name: string, file: File | null, isPublic?: boolean): FormData {
   const fd = new FormData();
   fd.append("name", name);
   if (file) fd.append("image", file);
+  if (isPublic !== undefined) fd.append("isPublic", String(isPublic));
   return fd;
 }
 
@@ -202,12 +178,24 @@ function editForm(name: string, file: File | null): FormData {
 // so the image URL must change to bust the browser cache in mounted lists.
 const candidateImageRevs: Record<string, number> = {};
 
+function candidatePath(id: string, image: boolean, context?: CandidateContext): string {
+  const params = new URLSearchParams();
+  if (context?.listId !== undefined) params.set("listId", context.listId);
+  if (context?.auctionId !== undefined) params.set("auctionId", context.auctionId);
+  if (image && candidateImageRevs[id]) params.set("r", String(candidateImageRevs[id]));
+  const query = params.toString();
+  return `/candidates/${encodeURIComponent(id)}${image ? "/image" : ""}${query ? `?${query}` : ""}`;
+}
+
 export const api = {
   base: BASE,
-  imageUrl: (id: string) => {
-    const rev = candidateImageRevs[id];
-    return rev ? `${BASE}/candidates/${id}/image?r=${rev}` : `${BASE}/candidates/${id}/image`;
+  async statistics(): Promise<StatisticsOverview> {
+    return (await apiRequest("/statistics")).json();
   },
+  async auctionStatistics(id: string): Promise<AuctionStatistics> {
+    return (await apiRequest(`/statistics/auctions/${encodeURIComponent(id)}`)).json();
+  },
+  imageUrl: (id: string, context?: CandidateContext) => `${BASE}${candidatePath(id, true, context)}`,
   bumpCandidateImage: (id: string) => {
     candidateImageRevs[id] = (candidateImageRevs[id] ?? 0) + 1;
   },
@@ -216,80 +204,78 @@ export const api = {
     `${BASE}/auctions/${auctionId}/battlefield/image${rev ? `?r=${rev}` : ""}`,
   auctionBackgroundUrl: (id: string, rev = 0) =>
     `${BASE}/auctions/${id}/background${rev ? `?r=${rev}` : ""}`,
-  async candidates(): Promise<Candidate[]> {
-    const r = await check(await fetch(`${BASE}/candidates`));
+  async candidates(includePublic = false): Promise<Candidate[]> {
+    const r = await apiRequest(`/candidates${includePublic === true ? "?includePublic=true" : ""}`);
     return r.json();
   },
-  async getCandidate(id: string): Promise<Candidate> {
-    const r = await check(await fetch(`${BASE}/candidates/${id}`));
+  async getCandidate(id: string, context?: CandidateContext): Promise<Candidate> {
+    const r = await apiRequest(candidatePath(id, false, context));
     return r.json();
   },
   async editCatalogCandidate(
     id: string,
     name: string,
     file: File | null,
+    isPublic?: boolean,
   ): Promise<Candidate> {
     assertFileBudget(file);
-    const r = await check(
-      await fetch(`${BASE}/candidates/${id}/edit`, {
-        method: "POST",
-        body: editForm(name, file),
-      }),
-    );
+    const r = await apiRequest(`/candidates/${id}/edit`, {
+      method: "POST",
+      body: editForm(name, file, isPublic),
+    });
     return r.json();
   },
-  async createCandidate(name: string, file: File): Promise<Candidate> {
+  async createCandidate(name: string, file: File, isPublic = false): Promise<Candidate> {
     assertFileBudget(file);
     const fd = new FormData();
     fd.append("name", name);
     fd.append("image", file);
-    const r = await check(
-      await fetch(`${BASE}/candidates`, { method: "POST", body: fd }),
-    );
+    fd.append("isPublic", String(isPublic));
+    const r = await apiRequest("/candidates", { method: "POST", body: fd });
     return r.json();
   },
   async archiveCandidate(id: string): Promise<void> {
-    await check(
-      await fetch(`${BASE}/candidates/${id}/archive`, { method: "POST" }),
-    );
+    await apiRequest(`/candidates/${id}/archive`, { method: "POST" });
   },
-  async lists(): Promise<CandidateList[]> {
-    const r = await check(await fetch(`${BASE}/lists`));
+  async lists(includePublic = false): Promise<CandidateList[]> {
+    const r = await apiRequest(`/lists${includePublic === true ? "?includePublic=true" : ""}`);
     return r.json();
   },
-  async createList(name: string, isDraft: boolean): Promise<CandidateList> {
-    const r = await check(
-      await fetch(`${BASE}/lists`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, isDraft }),
-      }),
-    );
+  async createList(name: string, isDraft: boolean, isPublic = false): Promise<CandidateList> {
+    const r = await apiRequest("/lists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, isDraft, isPublic }),
+    });
     return r.json();
   },
   async getList(id: string): Promise<CandidateList> {
-    const r = await check(await fetch(`${BASE}/lists/${id}`));
+    const r = await apiRequest(`/lists/${id}`);
     return r.json();
   },
-  async addEntry(listId: string, candidateId: string): Promise<CandidateList> {
-    const r = await check(
-      await fetch(`${BASE}/lists/${listId}/entries`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidateId }),
-      }),
-    );
+  async editList(id: string, name?: string, isPublic?: boolean): Promise<CandidateList> {
+    const r = await apiRequest(`/lists/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, isPublic }),
+    });
+    return r.json();
+  },
+  async addEntry(listId: string, candidateId: string, sourceListId?: string): Promise<CandidateList> {
+    const r = await apiRequest(`/lists/${listId}/entries`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId, sourceListId }),
+    });
     return r.json();
   },
   async removeEntry(
     listId: string,
     candidateId: string,
   ): Promise<CandidateList> {
-    const r = await check(
-      await fetch(`${BASE}/lists/${listId}/entries/${candidateId}`, {
-        method: "DELETE",
-      }),
-    );
+    const r = await apiRequest(`/lists/${listId}/entries/${candidateId}`, {
+      method: "DELETE",
+    });
     return r.json();
   },
   async reorder(
@@ -297,22 +283,18 @@ export const api = {
     candidateId: string,
     toIndex: number,
   ): Promise<CandidateList> {
-    const r = await check(
-      await fetch(`${BASE}/lists/${listId}/reorder`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidateId, toIndex }),
-      }),
-    );
+    const r = await apiRequest(`/lists/${listId}/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId, toIndex }),
+    });
     return r.json();
   },
   async archiveList(id: string): Promise<void> {
-    await check(await fetch(`${BASE}/lists/${id}/archive`, { method: "POST" }));
+    await apiRequest(`/lists/${id}/archive`, { method: "POST" });
   },
   async cloneList(id: string): Promise<CandidateList> {
-    const r = await check(
-      await fetch(`${BASE}/lists/${id}/clone`, { method: "POST" }),
-    );
+    const r = await apiRequest(`/lists/${id}/clone`, { method: "POST" });
     return r.json();
   },
   async editListEntry(
@@ -322,16 +304,14 @@ export const api = {
     file: File | null,
   ): Promise<{ candidate: Candidate; list: CandidateList }> {
     assertFileBudget(file);
-    const r = await check(
-      await fetch(`${BASE}/lists/${listId}/entries/${candidateId}/edit`, {
-        method: "POST",
-        body: editForm(name, file),
-      }),
-    );
+    const r = await apiRequest(`/lists/${listId}/entries/${candidateId}/edit`, {
+      method: "POST",
+      body: editForm(name, file),
+    });
     return r.json();
   },
   async auctions(): Promise<Auction[]> {
-    const r = await check(await fetch(`${BASE}/auctions`));
+    const r = await apiRequest("/auctions");
     return r.json();
   },
   async createAuction(
@@ -339,90 +319,75 @@ export const api = {
     sourceListId: string | null,
     simulationPromptTemplate = "",
   ): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, sourceListId, simulationPromptTemplate }),
-      }),
-    );
+    const r = await apiRequest("/auctions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, sourceListId, simulationPromptTemplate }),
+    });
     return r.json();
   },
   async cloneAuction(id: string, name: string): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${id}/clone`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${id}/clone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
     return r.json();
   },
   async getAuction(id: string): Promise<Auction> {
-    const r = await check(await fetch(`${BASE}/auctions/${id}`));
+    const r = await apiRequest(`/auctions/${id}`);
     return r.json();
   },
   async renameAuction(id: string, name: string): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
     return r.json();
   },
   async saveSimulationPromptTemplate(id: string, template: string): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ simulationPromptTemplate: template }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ simulationPromptTemplate: template }),
+    });
     return r.json();
   },
   async saveGeneralInfo(id: string, name: string, template: string): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, simulationPromptTemplate: template }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, simulationPromptTemplate: template }),
+    });
     return r.json();
   },
   async deleteAuction(id: string): Promise<void> {
-    await check(await fetch(`${BASE}/auctions/${id}`, { method: "DELETE" }));
+    await apiRequest(`/auctions/${id}`, { method: "DELETE" });
   },
   async startAuction(id: string): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${id}/start`, { method: "POST" }),
-    );
+    const r = await apiRequest(`/auctions/${id}/start`, { method: "POST" });
     return r.json();
   },
   async addAuctionEntry(
     auctionId: string,
     candidateId: string,
+    sourceListId?: string,
   ): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/entries`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidateId }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/entries`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId, sourceListId }),
+    });
     return r.json();
   },
   async removeAuctionEntry(
     auctionId: string,
     candidateId: string,
   ): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/entries/${candidateId}`, {
-        method: "DELETE",
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/entries/${candidateId}`, {
+      method: "DELETE",
+    });
     return r.json();
   },
   async reorderAuction(
@@ -430,13 +395,11 @@ export const api = {
     candidateId: string,
     toIndex: number,
   ): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/reorder`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidateId, toIndex }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ candidateId, toIndex }),
+    });
     return r.json();
   },
   async editAuctionEntry(
@@ -446,25 +409,24 @@ export const api = {
     file: File | null,
   ): Promise<{ candidate: Candidate; auction: Auction }> {
     assertFileBudget(file);
-    const r = await check(
-      await fetch(
-        `${BASE}/auctions/${auctionId}/entries/${candidateId}/edit`,
-        { method: "POST", body: editForm(name, file) },
-      ),
+    const r = await apiRequest(
+      `/auctions/${auctionId}/entries/${candidateId}/edit`,
+      { method: "POST", body: editForm(name, file) },
     );
     return r.json();
   },
-  async battlefields(): Promise<BattlefieldSummary[]> {
-    const r = await check(await fetch(`${BASE}/battlefields`));
+  async battlefields(includePublic = false): Promise<BattlefieldSummary[]> {
+    const r = await apiRequest(`/battlefields${includePublic === true ? "?includePublic=true" : ""}`);
     return r.json();
   },
   async getBattlefield(id: string): Promise<BattlefieldSummary> {
-    const r = await check(await fetch(`${BASE}/battlefields/${id}`));
+    const r = await apiRequest(`/battlefields/${id}`);
     return r.json();
   },
   async createBattlefield(
     fields: { name: string; geography: string; history: string },
     file: File,
+    isPublic = false,
   ): Promise<BattlefieldSummary> {
     assertFileBudget(file);
     const fd = new FormData();
@@ -472,15 +434,15 @@ export const api = {
     fd.append("geography", fields.geography);
     fd.append("history", fields.history);
     fd.append("image", file);
-    const r = await check(
-      await fetch(`${BASE}/battlefields`, { method: "POST", body: fd }),
-    );
+    fd.append("isPublic", String(isPublic));
+    const r = await apiRequest("/battlefields", { method: "POST", body: fd });
     return r.json();
   },
   async editBattlefield(
     id: string,
     fields: { name: string; geography: string; history: string },
     file: File | null,
+    isPublic?: boolean,
   ): Promise<BattlefieldSummary> {
     assertFileBudget(file);
     const fd = new FormData();
@@ -488,21 +450,18 @@ export const api = {
     fd.append("geography", fields.geography);
     fd.append("history", fields.history);
     if (file) fd.append("image", file);
-    const r = await check(
-      await fetch(`${BASE}/battlefields/${id}/edit`, {
-        method: "POST",
-        body: fd,
-      }),
-    );
+    if (isPublic !== undefined) fd.append("isPublic", String(isPublic));
+    const r = await apiRequest(`/battlefields/${id}/edit`, {
+      method: "POST",
+      body: fd,
+    });
     return r.json();
   },
   async archiveBattlefield(id: string): Promise<void> {
-    await check(
-      await fetch(`${BASE}/battlefields/${id}/archive`, { method: "POST" }),
-    );
+    await apiRequest(`/battlefields/${id}/archive`, { method: "POST" });
   },
   async getDraftBattlefield(auctionId: string): Promise<DraftBattlefield> {
-    const r = await check(await fetch(`${BASE}/auctions/${auctionId}/battlefield`));
+    const r = await apiRequest(`/auctions/${auctionId}/battlefield`);
     return r.json();
   },
   async saveDraftBattlefield(
@@ -515,44 +474,36 @@ export const api = {
     fd.append("geography", fields.geography);
     fd.append("history", fields.history);
     if (file) fd.append("image", file);
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/battlefield`, {
-        method: "POST",
-        body: fd,
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/battlefield`, {
+      method: "POST",
+      body: fd,
+    });
     return r.json();
   },
   async setAuctionBattlefield(
     auctionId: string,
     battlefieldId: string | null,
   ): Promise<Auction> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ battlefieldId }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ battlefieldId }),
+    });
     return r.json();
   },
   async saveAuctionBackground(auctionId: string, file: File): Promise<void> {
     assertFileBudget(file);
     const fd = new FormData();
     fd.append("image", file);
-    await check(
-      await fetch(`${BASE}/auctions/${auctionId}/background`, {
-        method: "POST",
-        body: fd,
-      }),
-    );
+    await apiRequest(`/auctions/${auctionId}/background`, {
+      method: "POST",
+      body: fd,
+    });
   },
   async deleteAuctionBackground(auctionId: string): Promise<void> {
-    await check(
-      await fetch(`${BASE}/auctions/${auctionId}/background`, {
-        method: "DELETE",
-      }),
-    );
+    await apiRequest(`/auctions/${auctionId}/background`, {
+      method: "DELETE",
+    });
   },
   teamFlagUrl: (auctionId: string, teamId: string) =>
     `${BASE}/auctions/${auctionId}/teams/${teamId}/flag`,
@@ -563,34 +514,28 @@ export const api = {
     assertFileBudget(file);
     const fd = new FormData();
     fd.append("image", file);
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/team-images`, { method: "POST", body: fd }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/team-images`, { method: "POST", body: fd });
     return r.json();
   },
   async getAuctionTeams(auctionId: string): Promise<SavedTeam[]> {
-    const r = await check(await fetch(`${BASE}/auctions/${auctionId}/teams`));
+    const r = await apiRequest(`/auctions/${auctionId}/teams`);
     return r.json();
   },
   async saveAuctionTeams(auctionId: string, teams: TeamPayload[]): Promise<SavedTeam[]> {
     assertJsonBudget({ teams });
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/teams`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ teams }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/teams`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teams }),
+    });
     return r.json();
   },
   async getLive(auctionId: string): Promise<LiveState> {
-    const r = await check(await fetch(`${BASE}/auctions/${auctionId}/live`));
+    const r = await apiRequest(`/auctions/${auctionId}/live`);
     return r.json();
   },
   async sendNextCandidate(auctionId: string): Promise<LiveState> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/next`, { method: "POST" }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/live/next`, { method: "POST" });
     return r.json();
   },
   async confirmBid(
@@ -599,51 +544,41 @@ export const api = {
     contributions: number[],
     drafts?: number[][],
   ): Promise<LiveState> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/bids`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ team, contributions, drafts }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/live/bids`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team, contributions, drafts }),
+    });
     return r.json();
   },
   async passCandidate(
     auctionId: string,
     drafts?: number[][],
   ): Promise<LiveState> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/pass`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ drafts }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/live/pass`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ drafts }),
+    });
     return r.json();
   },
   async completeSale(
     auctionId: string,
     drafts?: number[][],
   ): Promise<LiveState> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/sale`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ drafts }),
-      }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/live/sale`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ drafts }),
+    });
     return r.json();
   },
   async endAuction(auctionId: string): Promise<LiveState> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/end`, { method: "POST" }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/live/end`, { method: "POST" });
     return r.json();
   },
   async undoLiveAction(auctionId: string): Promise<LiveState> {
-    const r = await check(
-      await fetch(`${BASE}/auctions/${auctionId}/live/undo`, { method: "POST" }),
-    );
+    const r = await apiRequest(`/auctions/${auctionId}/live/undo`, { method: "POST" });
     return r.json();
   },
 };

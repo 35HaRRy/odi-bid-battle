@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PgStore } from "../src/store.js";
+import { ownedStore } from "./helpers/domain.js";
 import { createAuctionTeam, addTeamMember } from "../src/domain.js";
 
 const DATABASE_URL =
@@ -17,7 +18,7 @@ const flag = {
 
 describe("team store persistence", () => {
   it("saves unequal drafts, reloads them, and isolates auctions", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const auction = await store.saveAuction("Team battle", null);
       const t1 = createAuctionTeam(auction.id, "Kuzey", 0, { flag });
@@ -52,13 +53,13 @@ describe("team store persistence", () => {
   }, 30000);
 
   it("rejects unknown auctions", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
-      await expect(store.teams.getAuctionTeams("missing")).rejects.toThrow("auction not found");
+      await expect(store.teams.getAuctionTeams("missing")).rejects.toThrow("not found");
       const t1 = createAuctionTeam("missing", "T1", 0, { flag });
       const t2 = createAuctionTeam("missing", "T2", 1, { flag });
       await expect(store.teams.saveAuctionTeams("missing", [t1, t2])).rejects.toThrow(
-        "auction not found",
+        "not found",
       );
     } finally {
       await store.close();

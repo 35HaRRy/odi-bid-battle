@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
+import { AuthStore } from "./auth-store.js";
+import { requestStore } from "./access.js";
 import {
   REQUEST_BODY_BUDGET_BYTES,
   SINGLE_FILE_LIMIT_BYTES,
@@ -24,7 +26,7 @@ export function isMulterFileSizeError(err: unknown): boolean {
 export function uploadSingle(field: string) {
   // done takes an explicit any so inline callbacks keep multer's old shape.
   return (req: Request, res: Response, done: (err?: any) => void) => {
-    upload.single(field)(req, res, (err: unknown) => {
+    upload.single(field)(req, res, async (err: unknown) => {
       if (err) {
         done(err);
         return;
@@ -37,6 +39,13 @@ export function uploadSingle(field: string) {
         const total = fileBytes + fieldBytes + 4096;
         if (total > REQUEST_BODY_BUDGET_BYTES) {
           done(new PayloadTooLargeError());
+          return;
+        }
+        // Upload parsing can outlive the session or a concurrent logout/reset.
+        const store = requestStore(res);
+        const user = await new AuthStore(store.pool!).resolveSession(res.locals.sessionToken);
+        if (user?.id !== store.userId) {
+          res.status(401).json({ error: "Authentication required" });
           return;
         }
         done();

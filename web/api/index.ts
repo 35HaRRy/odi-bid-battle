@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { attachDatabasePool } from "@vercel/functions";
-import { buildApp } from "../../api/src/app.js";
+import { buildApp, loadAuthConfig } from "../../api/src/app.js";
 import { PgStore } from "../../api/src/store.js";
 
 type VercelRequest = IncomingMessage & { url?: string };
@@ -28,13 +28,14 @@ function requiredDatabaseUrl(): string {
 async function getApp(): Promise<ExpressApp> {
   if (!appPromise) {
     appPromise = (async () => {
+      const config = loadAuthConfig();
       const store = await PgStore.connect(requiredDatabaseUrl());
       // PgStore.connect uses a small pool with short idle timeouts; keep the
       // function instance alive just long enough to clean idle connections
       // up before suspension instead of leaking them.
       try {
         if (store.pool) attachDatabasePool(store.pool);
-        return buildApp(store);
+        return buildApp(store, { config });
       } catch (error) {
         await store.close();
         throw error;
@@ -57,9 +58,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const stripped = url.replace(/^\/api(?=\/|$)/, "") || "/";
     req.url = stripped;
     app(req, res);
-  } catch (err) {
+  } catch {
     // eslint-disable-next-line no-console
-    console.error("api init failed", err);
+    console.error("api init failed");
     res.status(500).json({ error: "service unavailable" });
   }
 }

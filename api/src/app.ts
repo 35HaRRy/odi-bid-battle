@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { PgStore } from "./store.js";
 import { AssetError } from "./battlefield-domain.js";
+import { sendAsset } from "./asset-response.js";
 import { StartValidationError } from "./domain.js";
 import {
   REQUEST_BODY_BUDGET_BYTES,
@@ -12,15 +13,26 @@ import { isMulterFileSizeError, uploadSingle } from "./upload.js";
 import { assetErrorHttp, mountBattlefieldRoutes } from "./battlefield-routes.js";
 import { mountLiveRoutes } from "./live-routes.js";
 import { mountTeamRoutes } from "./team-routes.js";
+import { AuthStore } from "./auth-store.js";
+import { loadAuthConfig, validateAuthConfig, type AuthConfig } from "./auth-config.js";
+import { createAccountMailer, type AccountMailer } from "./auth-mail.js";
+import { mountAuthRoutes, mountAuthSecurity } from "./auth-routes.js";
+import { mountGoogleAuth } from "./auth-google.js";
+import { AccessError, requestStore, publicFlag, candidateContext } from "./access.js";
+
+export interface AppOptions { config?: AuthConfig; mail?: AccountMailer; allowedOrigin?: string }
+export { loadAuthConfig } from "./auth-config.js";
+export type { AuthConfig } from "./auth-config.js";
 
 function toHttp(err: unknown): { status: number; body: string } {
+  if (err instanceof AccessError) return { status: 404, body: "not found" };
   if (err instanceof AssetError) return assetErrorHttp(err) as { status: number; body: string };
   if (err instanceof PayloadTooLargeError) return { status: 413, body: err.message };
   if (err instanceof StartValidationError)
     return { status: 400, body: "invalid preparation" };
   const msg = (err as Error).message ?? "";
   if (msg === "preparation locked") return { status: 409, body: msg };
-  if (msg === "invalid name" || msg === "invalid image" || msg === "invalid simulation prompt template")
+  if (msg === "invalid name" || msg === "invalid image" || msg === "invalid simulation prompt template" || msg === "invalid candidate context")
     return { status: 400, body: msg };
   if (/duplicate/i.test(msg)) return { status: 409, body: "duplicate entry" };
   if (
@@ -44,14 +56,13 @@ function toImageInput(
 // Importing this module must not open ports or database connections; it only
 // builds the Express app. Standalone startup lives in server.ts, Vercel
 // startup in web/api/index.ts.
-export function buildApp(store: PgStore): express.Express {
+export function buildApp(store: PgStore, options: AppOptions = {}): express.Express {
   const app = express();
-  // Local dev runs the frontend on :5173 against the API on :3001, so CORS
-  // stays enabled outside production. Production serves frontend and API
-  // from the same origin and needs no broad CORS allowance.
-  if (process.env.NODE_ENV !== "production") {
-    app.use(cors());
-  }
+  const config = validateAuthConfig({ ...(options.config ?? loadAuthConfig()), ...(options.allowedOrigin ? { allowedOrigin: options.allowedOrigin } : {}) });
+  if (!store.pool) throw new Error("Authentication database required");
+  const auth = new AuthStore(store.pool);
+  app.use(cors({ origin: config.allowedOrigin, credentials: true, allowedHeaders: ["Content-Type", "X-CSRF-Token"] }));
+  mountAuthSecurity(app, auth, config);
   // Reject declared over-budget bodies before any parser streams them.
   app.use((req, res, next) => {
     const declared = Number(req.headers["content-length"]);
@@ -74,34 +85,59 @@ export function buildApp(store: PgStore): express.Express {
     }
     next();
   });
-  mountBattlefieldRoutes(app, store);
-  mountTeamRoutes(app, store);
-  mountLiveRoutes(app, store);
-
+  // Public account routes MUST stay before Task 5's mandatory domain authentication gate.
+  mountAuthRoutes(app, auth, config, options.mail ?? createAccountMailer());
+  if (config.google) mountGoogleAuth(app,auth,{...config,...config.google});
   app.get("/health", (_req, res) => res.json({ ok: true }));
+  app.use((_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    if (!res.locals.user) return res.status(401).json({ error: "authentication required" });
+    res.locals.store = store.forUser(res.locals.user.id);
+    next();
+  });
+  mountBattlefieldRoutes(app);
+  mountTeamRoutes(app);
+  mountLiveRoutes(app);
+
+  app.get("/statistics", async (_req, res) => {
+    try { res.json(await requestStore(res).getStatistics()); }
+    catch (err) {
+      const h = toHttp(err);
+      res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.get("/statistics/auctions/:id", async (req, res) => {
+    try { res.json(await requestStore(res).getAuctionStatistics(req.params.id)); }
+    catch (err) {
+      const h = toHttp(err);
+      res.status(h.status).json({ error: h.body });
+    }
+  });
 
   app.post("/candidates", uploadSingle("image"), async (req, res) => {
     try {
       const name = String(req.body?.name ?? "");
       const file = req.file;
       if (!file) return res.status(400).json({ error: "image required" });
-      const rec = await store.saveCandidate(
+      const rec = await requestStore(res).saveCandidate(
         name,
         file.buffer,
         file.mimetype,
         file.originalname,
+        publicFlag(req.body?.isPublic),
       );
-      res.status(201).json({ id: rec.id, name: rec.name });
+      res.status(201).json({ id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic });
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
     }
   });
 
-  app.get("/candidates", async (_req, res) => {
+  app.get("/candidates", async (req, res) => {
     try {
-      const list = await store.listCandidates();
-      res.json(list.map((c) => ({ id: c.id, name: c.name })));
+      const list = await requestStore(res).listCandidates(req.query.includePublic === "true");
+      res.json(list.map((c) => ({ id: c.id, name: c.name, ownerUserId: c.ownerUserId, isOwner: c.isOwner, isPublic: c.isPublic })));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -110,11 +146,12 @@ export function buildApp(store: PgStore): express.Express {
 
   app.get("/candidates/:id", async (req, res) => {
     try {
-      const rec = await store.getCandidate(req.params.id);
+      const rec = await requestStore(res).getCandidate(req.params.id, candidateContext(req.query));
       res.json({
         id: rec.id,
         name: rec.name,
         archived: rec.archivedAt !== null,
+        ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic,
       });
     } catch (err) {
       const h = toHttp(err);
@@ -124,10 +161,8 @@ export function buildApp(store: PgStore): express.Express {
 
   app.get("/candidates/:id/image", async (req, res) => {
     try {
-      const rec = await store.getCandidate(req.params.id);
-      res.setHeader("Content-Type", rec.imageMime || "image/png");
-      res.setHeader("Cache-Control", "no-store");
-      res.send(rec.image);
+      const rec = await requestStore(res).getCandidate(req.params.id, candidateContext(req.query));
+      sendAsset(res, { buffer: rec.image, mime: rec.imageMime });
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -136,7 +171,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/candidates/:id/archive", async (req, res) => {
     try {
-      await store.archiveCandidate(req.params.id);
+      await requestStore(res).archiveCandidate(req.params.id);
       res.json({ ok: true });
     } catch (err) {
       const h = toHttp(err);
@@ -151,12 +186,13 @@ export function buildApp(store: PgStore): express.Express {
       try {
         const name = String(req.body?.name ?? "");
         const file = req.file;
-        const rec = await store.editCatalogCandidate(
+        const rec = await requestStore(res).editCatalogCandidate(
           req.params.id,
           name,
           toImageInput(file),
+          publicFlag(req.body?.isPublic),
         );
-        res.json({ id: rec.id, name: rec.name });
+        res.json({ id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic });
       } catch (err) {
         const h = toHttp(err);
         return res.status(h.status).json({ error: h.body });
@@ -167,7 +203,7 @@ export function buildApp(store: PgStore): express.Express {
   app.post("/lists", async (req, res) => {
     try {
       const { name = "", isDraft = true } = req.body ?? {};
-      const rec = await store.saveList(String(name), Boolean(isDraft));
+      const rec = await requestStore(res).saveList(String(name), Boolean(isDraft), publicFlag(req.body?.isPublic));
       res.status(201).json(rec);
     } catch (err) {
       const h = toHttp(err);
@@ -175,9 +211,9 @@ export function buildApp(store: PgStore): express.Express {
     }
   });
 
-  app.get("/lists", async (_req, res) => {
+  app.get("/lists", async (req, res) => {
     try {
-      res.json(await store.listLists());
+      res.json(await requestStore(res).listLists(req.query.includePublic === "true"));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -186,7 +222,16 @@ export function buildApp(store: PgStore): express.Express {
 
   app.get("/lists/:id", async (req, res) => {
     try {
-      res.json(await store.getList(req.params.id));
+      res.json(await requestStore(res).getList(req.params.id));
+    } catch (err) {
+      const h = toHttp(err);
+      return res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.patch("/lists/:id", async (req, res) => {
+    try {
+      res.json(await requestStore(res).editList(req.params.id, req.body?.name == null ? undefined : String(req.body.name), publicFlag(req.body?.isPublic)));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -195,8 +240,8 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/lists/:id/entries", async (req, res) => {
     try {
-      await store.addEntryToList(req.params.id, String(req.body?.candidateId ?? ""));
-      res.json(await store.getList(req.params.id));
+      await requestStore(res).addEntryToList(req.params.id, String(req.body?.candidateId ?? ""), req.body?.sourceListId === undefined ? undefined : String(req.body.sourceListId));
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -205,8 +250,8 @@ export function buildApp(store: PgStore): express.Express {
 
   app.delete("/lists/:id/entries/:candidateId", async (req, res) => {
     try {
-      await store.removeEntryFromList(req.params.id, req.params.candidateId);
-      res.json(await store.getList(req.params.id));
+      await requestStore(res).removeEntryFromList(req.params.id, req.params.candidateId);
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -215,12 +260,12 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/lists/:id/reorder", async (req, res) => {
     try {
-      await store.reorderEntryInList(
+      await requestStore(res).reorderEntryInList(
         req.params.id,
         String(req.body?.candidateId ?? ""),
         Number(req.body?.toIndex ?? 0),
       );
-      res.json(await store.getList(req.params.id));
+      res.json(await requestStore(res).getList(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -229,7 +274,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/lists/:id/archive", async (req, res) => {
     try {
-      await store.archiveList(req.params.id);
+      await requestStore(res).archiveList(req.params.id);
       res.json({ ok: true });
     } catch (err) {
       const h = toHttp(err);
@@ -239,7 +284,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/lists/:id/clone", async (req, res) => {
     try {
-      const rec = await store.cloneList(req.params.id);
+      const rec = await requestStore(res).cloneList(req.params.id);
       res.status(201).json(rec);
     } catch (err) {
       const h = toHttp(err);
@@ -254,13 +299,13 @@ export function buildApp(store: PgStore): express.Express {
       try {
         const name = String(req.body?.name ?? "");
         const file = req.file;
-        const rec = await store.editListEntryCandidate(
+        const rec = await requestStore(res).editListEntryCandidate(
           req.params.id,
           req.params.candidateId,
           name,
           toImageInput(file),
         );
-        res.json({ candidate: { id: rec.id, name: rec.name }, list: await store.getList(req.params.id) });
+        res.json({ candidate: { id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic }, list: await requestStore(res).getList(req.params.id) });
       } catch (err) {
         const h = toHttp(err);
         return res.status(h.status).json({ error: h.body });
@@ -271,7 +316,7 @@ export function buildApp(store: PgStore): express.Express {
   app.post("/auctions", async (req, res) => {
     try {
       const { name = "", sourceListId = null, simulationPromptTemplate = "" } = req.body ?? {};
-      const rec = await store.saveAuction(
+      const rec = await requestStore(res).saveAuction(
         String(name),
         sourceListId ? String(sourceListId) : null,
         typeof simulationPromptTemplate === "string" ? simulationPromptTemplate : "",
@@ -286,7 +331,7 @@ export function buildApp(store: PgStore): express.Express {
   app.post("/auctions/:id/clone", async (req, res) => {
     try {
       const name = String(req.body?.name ?? "");
-      res.status(201).json(await store.cloneAuction(req.params.id, name));
+      res.status(201).json(await requestStore(res).cloneAuction(req.params.id, name));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -295,7 +340,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.get("/auctions", async (_req, res) => {
     try {
-      res.json(await store.listAuctions());
+      res.json(await requestStore(res).listAuctions());
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -304,7 +349,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.get("/auctions/:id", async (req, res) => {
     try {
-      res.json(await store.getAuction(req.params.id));
+      res.json(await requestStore(res).getAuction(req.params.id));
     } catch (err) {
       const h = toHttp(err);
       return res.status(h.status).json({ error: h.body });
@@ -313,7 +358,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.delete("/auctions/:id", async (req, res) => {
     try {
-      await store.deleteDraftAuction(req.params.id);
+      await requestStore(res).deleteDraftAuction(req.params.id);
       res.status(204).end();
     } catch (err) {
       const h = toHttp(err);
@@ -323,7 +368,7 @@ export function buildApp(store: PgStore): express.Express {
 
   app.post("/auctions/:id/start", async (req, res) => {
     try {
-      res.json(await store.startAuction(req.params.id));
+      res.json(await requestStore(res).startAuction(req.params.id));
     } catch (err) {
       if (err instanceof StartValidationError) {
         return res
@@ -341,20 +386,20 @@ export function buildApp(store: PgStore): express.Express {
       if (battlefieldId !== undefined && battlefieldId !== null && typeof battlefieldId !== "string") {
         return res.status(400).json({ error: "invalid battlefieldId" });
       }
-      let rec = await store.getAuction(req.params.id);
+      let rec = await requestStore(res).getAuction(req.params.id);
       if (req.body?.name !== undefined)
-        rec = await store.renameAuction(req.params.id, String(req.body.name));
+        rec = await requestStore(res).renameAuction(req.params.id, String(req.body.name));
       if (req.body?.simulationPromptTemplate !== undefined) {
         if (typeof req.body.simulationPromptTemplate !== "string") {
           return res.status(400).json({ error: "invalid simulation prompt template" });
         }
-        rec = await store.setSimulationPromptTemplate(
+        rec = await requestStore(res).setSimulationPromptTemplate(
           req.params.id,
           req.body.simulationPromptTemplate,
         );
       }
       if (req.body?.battlefieldId !== undefined)
-        rec = await store.setAuctionBattlefield(
+        rec = await requestStore(res).setAuctionBattlefield(
           req.params.id,
           battlefieldId,
         );
@@ -368,9 +413,10 @@ export function buildApp(store: PgStore): express.Express {
   app.post("/auctions/:id/entries", async (req, res) => {
     try {
       res.json(
-        await store.addEntryToAuction(
+        await requestStore(res).addEntryToAuction(
           req.params.id,
           String(req.body?.candidateId ?? ""),
+          req.body?.sourceListId === undefined ? undefined : String(req.body.sourceListId),
         ),
       );
     } catch (err) {
@@ -382,7 +428,7 @@ export function buildApp(store: PgStore): express.Express {
   app.delete("/auctions/:id/entries/:candidateId", async (req, res) => {
     try {
       res.json(
-        await store.removeEntryFromAuction(req.params.id, req.params.candidateId),
+        await requestStore(res).removeEntryFromAuction(req.params.id, req.params.candidateId),
       );
     } catch (err) {
       const h = toHttp(err);
@@ -393,7 +439,7 @@ export function buildApp(store: PgStore): express.Express {
   app.post("/auctions/:id/reorder", async (req, res) => {
     try {
       res.json(
-        await store.reorderEntryInAuction(
+        await requestStore(res).reorderEntryInAuction(
           req.params.id,
           String(req.body?.candidateId ?? ""),
           Number(req.body?.toIndex ?? 0),
@@ -412,15 +458,15 @@ export function buildApp(store: PgStore): express.Express {
       try {
         const name = String(req.body?.name ?? "");
         const file = req.file;
-        const rec = await store.editDraftEntryCandidate(
+        const rec = await requestStore(res).editDraftEntryCandidate(
           req.params.id,
           req.params.candidateId,
           name,
           toImageInput(file),
         );
         res.json({
-          candidate: { id: rec.id, name: rec.name },
-          auction: await store.getAuction(req.params.id),
+          candidate: { id: rec.id, name: rec.name, ownerUserId: rec.ownerUserId, isOwner: rec.isOwner, isPublic: rec.isPublic },
+          auction: await requestStore(res).getAuction(req.params.id),
         });
       } catch (err) {
         const h = toHttp(err);
@@ -437,9 +483,12 @@ export function buildApp(store: PgStore): express.Express {
   // Body-parser (entity.too.large) and multer (LIMIT_FILE_SIZE) errors skip
   // route handlers, so map them to JSON 413 instead of an HTML error page.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = (err as { status?: number }).status;
     const type = (err as { type?: string }).type;
+    if (status === 400 || type === "entity.parse.failed") {
+      return res.status(400).json({ error: "invalid request" });
+    }
     if (status === 413 || type === "entity.too.large") {
       return res.status(413).json({ error: "payload too large" });
     }
@@ -449,7 +498,8 @@ export function buildApp(store: PgStore): express.Express {
     if (isMulterFileSizeError(err)) {
       return res.status(413).json({ error: "image too large" });
     }
-    return next(err);
+    // Default Express error pages/logs can echo malformed credential bodies.
+    return res.status(500).json({ error: "service unavailable" });
   });
 
   return app;

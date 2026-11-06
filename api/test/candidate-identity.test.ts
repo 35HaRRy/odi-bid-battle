@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PgStore } from "../src/store.js";
+import { ownedStore } from "./helpers/domain.js";
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -8,15 +9,29 @@ const DATABASE_URL =
 async function saveSample(store: PgStore, name: string, byte: number) {
   return store.saveCandidate(
     name,
-    Buffer.from([byte, byte + 1]),
+    Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from([byte, byte + 1])]),
     "image/png",
     `${name}.png`,
   );
 }
 
 describe("candidate identity on edit", () => {
+  it("preserves catalog sharing on referenced replacement but context edits stay private", async () => {
+    const store = await ownedStore(DATABASE_URL);
+    try {
+      const c = await store.saveCandidate("Shared", Buffer.from("89504e470d0a1a0a01", "hex"), "image/png", "one.png", true);
+      const list = await store.saveList("References", false, true);
+      await store.addEntryToList(list.id, c.id);
+      const replacement = await store.editCatalogCandidate(c.id, "Shared replacement", null);
+      expect(replacement).toMatchObject({ isPublic: true, isOwner: true, ownerUserId: store.userId });
+      expect(replacement.id).not.toBe(c.id);
+      const contextCopy = await store.editListEntryCandidate(list.id, c.id, "Private context copy", null);
+      expect(contextCopy.isPublic).toBe(false);
+      await expect(store.getCandidate(c.id, { listId: list.id })).rejects.toThrow("not found");
+    } finally { await store.close(); }
+  });
   it("edits an unreferenced catalog candidate in place", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const c = await saveSample(store, "Yalin Aday", 11);
       const updated = await store.editCatalogCandidate(c.id, "Yalin Aday v2", null);
@@ -29,7 +44,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("copies a referenced candidate, archives the original, keeps old lists on the original", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Katalog A", 21);
       const list = await store.saveList("Liste Ref", true);
@@ -41,7 +56,7 @@ describe("candidate identity on edit", () => {
       expect(b.name).toBe("Katalog A v2");
       // image bytes copied when no new image supplied
       const bFull = await store.getCandidate(b.id);
-      expect(Buffer.from(bFull.image).length).toBe(2);
+      expect(bFull.image).toEqual(a.image);
       // original archived: hidden from catalog, still resolvable + list keeps original
       expect((await store.listCandidates()).map((x) => x.id)).not.toContain(a.id);
       expect((await store.getCandidate(a.id)).archivedAt).not.toBeNull();
@@ -54,7 +69,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("editing a list entry always creates a new record used only in that list", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Liste Aday", 31);
       const l1 = await store.saveList("Liste Bir", true);
@@ -73,7 +88,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("editing a draft entry forks the draft and uses the new record there", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Taslak Aday", 41);
       const list = await store.saveList("Kaynak Liste", true);
@@ -96,7 +111,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("archiving a list hides it from selection but keeps auctions created from it", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Arsiv Aday", 51);
       const list = await store.saveList("Arsiv Liste", true);
@@ -114,7 +129,7 @@ describe("candidate identity on edit", () => {
   });
 
   it("resolves archived candidates by id for existing references", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const a = await saveSample(store, "Eski Aday", 61);
       const list = await store.saveList("Eski Liste", true);

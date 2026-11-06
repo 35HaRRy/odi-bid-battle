@@ -18,6 +18,11 @@ describe("candidate identity editing i18n", () => {
       "archiveText",
       "archived",
       "updated",
+      "shareRecord",
+      "includePublic",
+      "publicRecord",
+      "privateRecord",
+      "sharedRecord",
     ]) {
       expect(t("tr", k)).not.toBe(k);
       expect(t("en", k)).not.toBe(k);

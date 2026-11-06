@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PgStore } from "../src/store.js";
+import { fixtureClient, fixtureOrigin, ownedStore } from "./helpers/domain.js";
 import { AssetError } from "../src/battlefield-domain.js";
 import {
   createAuctionTeam,
@@ -115,38 +116,39 @@ describe("POST /auctions/:id/start", () => {
   it("validates, starts, and locks preparation over HTTP", async () => {
     const { buildApp } = await import("../src/app.js");
     const { Server } = await import("node:http");
-    const store = await PgStore.connect(DATABASE_URL);
-    const app = buildApp(store);
+    const store = await ownedStore(DATABASE_URL);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     const server: InstanceType<typeof Server> = app.listen(0, "127.0.0.1");
     await new Promise<void>((r) => server.once("listening", r));
     const addr = server.address();
     const base =
       addr && typeof addr === "object" ? `http://127.0.0.1:${addr.port}` : "";
     try {
+      const request = await fixtureClient(base, store);
       const bad = await (
-        await fetch(`${base}/auctions`, {
+        await request(`/auctions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: "Bos", sourceListId: null }),
         })
       ).json();
-      const rejected = await fetch(`${base}/auctions/${bad.id}/start`, { method: "POST" });
+      const rejected = await request(`/auctions/${bad.id}/start`, { method: "POST" });
       expect(rejected.status).toBe(400);
       expect((await rejected.json()).fieldErrors.length).toBeGreaterThan(0);
 
       const { auction } = await (async () => {
-        const s = await PgStore.connect(DATABASE_URL);
+        const s = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
         try {
           return await seedReadyAuction(s);
         } finally {
           await s.close();
         }
       })();
-      const started = await fetch(`${base}/auctions/${auction.id}/start`, { method: "POST" });
+      const started = await request(`/auctions/${auction.id}/start`, { method: "POST" });
       expect(started.status).toBe(200);
       expect((await started.json()).status).toBe("ongoing");
 
-      const locked = await fetch(`${base}/auctions/${auction.id}`, {
+      const locked = await request(`/auctions/${auction.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "Degisti" }),
@@ -160,8 +162,54 @@ describe("POST /auctions/:id/start", () => {
 });
 
 describe("startAuction transaction", () => {
+  it.each(["add", "remove", "reorder", "edit", "edit-following"] as const)("rejects %s when start commits after draft preflight but before the mutation transaction", async (action) => {
+    const store = await ownedStore(DATABASE_URL);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const { auction, ids } = await seedReadyAuction(store);
+      if (action !== "edit-following") await store.renameAuction(auction.id, "Forked draft");
+      const extra = await store.saveCandidate("Extra", PNG, "image/png", "extra.png");
+      let notify!: () => void;
+      const reached = new Promise<void>(resolve => { notify = resolve; });
+      let paused = false;
+      const pause = async () => {
+        if (paused) return;
+        paused = true;
+        notify();
+        await gate;
+      };
+      // Pause only the mutation's connection/write; start runs on the real pool.
+      const delayedPool = {
+        query: async (text: string, params?: unknown[]) => {
+          if (/^\s*(INSERT|UPDATE|DELETE)\b/i.test(text)) await pause();
+          return store.pool!.query(text, params);
+        },
+        connect: async () => { await pause(); return store.pool!.connect(); },
+      };
+      const mutator = new PgStore(delayedPool).forUser(store.userId);
+      const operation = action === "add" ? mutator.addEntryToAuction(auction.id, extra.id)
+        : action === "remove" ? mutator.removeEntryFromAuction(auction.id, ids[0])
+        : action === "reorder" ? mutator.reorderEntryInAuction(auction.id, ids[0], 1)
+        : mutator.editDraftEntryCandidate(auction.id, ids[0], "Changed", null);
+      const outcome = operation.then(() => null, error => error);
+      await reached;
+      await store.startAuction(auction.id);
+      const live = await store.live.sendNext(auction.id);
+      const candidates = await store.listCandidates();
+      release();
+      expect(await outcome).toEqual(new AssetError("preparation locked"));
+      expect((await store.getAuction(auction.id)).entries).toEqual(ids);
+      expect(await store.live.getLive(auction.id)).toEqual(live);
+      expect(await store.listCandidates()).toEqual(candidates);
+    } finally {
+      release();
+      await store.close();
+    }
+  });
+
   it("blocks start until preparation constraints pass", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const bad = await store.saveAuction("Bos", null);
       await expect(store.startAuction(bad.id)).rejects.toMatchObject({ fieldErrors: expect.any(Array) });
@@ -172,7 +220,7 @@ describe("startAuction transaction", () => {
   }, 30000);
 
   it("locks preparation atomically and preserves it across library changes", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction, ids, list } = await seedReadyAuction(store);
       const started = await store.startAuction(auction.id);
@@ -197,7 +245,7 @@ describe("startAuction transaction", () => {
       );
 
       // Restart restores the same locked preparation.
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try {
         const again = await fresh.getAuction(auction.id);
         expect(again.status).toBe("ongoing");

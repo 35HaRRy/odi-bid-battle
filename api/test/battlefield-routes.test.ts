@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Server } from "node:http";
 import { buildApp } from "../src/app.js";
 import { PgStore } from "../src/store.js";
+import { fixtureFetch, fixtureOrigin, ownedStore } from "./helpers/domain.js";
 
 const VALID_PNG = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c6360000002000179a489740000000049454e44ae426082",
@@ -12,19 +13,21 @@ describe.sequential("Battlefield & Background HTTP Routes", () => {
   let store: PgStore;
   let server: Server;
   let base: string;
+  let fetch: Awaited<ReturnType<typeof fixtureFetch>>;
 
   beforeEach(async () => {
-    store = await PgStore.connect(
+    store = await ownedStore(
       process.env.DATABASE_URL ?? "postgres://bidbattle:bidbattle@localhost:5433/bidbattle"
     );
 
-    const app = buildApp(store);
+    const app = buildApp(store, { allowedOrigin: fixtureOrigin });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", resolve));
     const addr = server.address();
     if (addr && typeof addr === "object") {
       base = `http://127.0.0.1:${addr.port}`;
     }
+    fetch = await fixtureFetch(base, store);
   });
 
   afterEach(async () => {

@@ -10,6 +10,8 @@ describe("auction drafts i18n", () => {
       "draftName",
       "resume",
       "fromList",
+      "includePublic",
+      "sharedRecord",
       "searchAuctions",
       "currentDraft",
     ])
@@ -20,6 +22,8 @@ describe("auction drafts i18n", () => {
       "draftName",
       "resume",
       "fromList",
+      "includePublic",
+      "sharedRecord",
       "searchAuctions",
       "currentDraft",
     ])

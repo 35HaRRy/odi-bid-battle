@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PgStore } from "../src/store.js";
+import { ownedStore } from "./helpers/domain.js";
 import { addTeamMember, createAuctionTeam } from "../src/domain.js";
 
 const DATABASE_URL =
@@ -67,7 +68,7 @@ async function seedLiveAuction(store: PgStore) {
 
 describe("live round store", () => {
   it("undo restores halfway skip, transferred opening drafts, and permanent preparation lock", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction, ids } = await seedLiveAuctionWithGold(store, 20, 20, 8);
       for (const [team, amount] of [[0, 1], [1, 20], [0, 1]] as const) {
@@ -100,7 +101,7 @@ describe("live round store", () => {
   });
 
   it("undo termination restores only ready-to-end state across reconnects", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction } = await seedLiveAuctionWithGold(store, 1, 1);
       for (const team of [0, 1] as const) {
@@ -110,14 +111,14 @@ describe("live round store", () => {
       }
       const before = await store.live.getLive(auction.id);
       await store.live.endAuction(auction.id);
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try { expect(await fresh.live.undo(auction.id)).toEqual(before); }
       finally { await fresh.close(); }
       expect((await store.getAuction(auction.id)).status).toBe("ongoing");
     } finally { await store.close(); }
   });
   it("undo restores sale drafts and exact refunds only after undoing later presentation", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction, ids } = await seedLiveAuction(store);
       await store.live.sendNext(auction.id);
@@ -136,14 +137,14 @@ describe("live round store", () => {
       expect(restored.teams[0].members.map((m) => m.balance)).toEqual([10, 10]);
       expect(restored.teams[1].remainingGold).toBe(20);
       expect(restored.teams[0].acquired).toEqual([]);
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try {
         expect(await fresh.live.getLive(auction.id)).toEqual(restored);
       } finally { await fresh.close(); }
     } finally { await store.close(); }
   });
   it("opens with no active candidate and persists across reconnects", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction } = await seedLiveAuction(store);
       const live = await store.live.getLive(auction.id);
@@ -159,7 +160,7 @@ describe("live round store", () => {
         [0, 0],
         [0],
       ]);
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try {
         expect((await fresh.live.getLive(auction.id)).active).toBe(false);
       } finally {
@@ -171,7 +172,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("switches the battlefield after halfway processing and restores it on undo", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction } = await seedLiveAuctionWithGold(store, 20, 20, 4);
       await store.live.sendNext(auction.id);
@@ -199,7 +200,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("counts an allowed skip at halfway and undo restores the initial scene", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction } = await seedLiveAuctionWithGold(store, 2, 2, 4);
       await store.live.sendNext(auction.id);
@@ -222,7 +223,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("sends next candidate in fixed order and confirms strictly increasing bids without deducting gold", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction, ids } = await seedLiveAuction(store);
       const opened = await store.live.sendNext(auction.id);
@@ -257,7 +258,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("scenario 5: settles the latest confirmed bid, deducts only the winner, and clears the round", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction, ids } = await seedLiveAuction(store);
       await store.live.sendNext(auction.id);
@@ -297,7 +298,7 @@ describe("live round store", () => {
       // Settling twice is rejected; the round is gone.
       await expect(store.live.sell(auction.id)).rejects.toThrow("no active round");
       // Persists across reconnects.
-      const fresh = await PgStore.connect(DATABASE_URL);
+      const fresh = (await PgStore.connect(DATABASE_URL)).forUser(store.userId);
       try {
         const again = await fresh.live.getLive(auction.id);
         expect(again.teams[0].members.map((m) => m.balance)).toEqual([4, 4]);
@@ -311,7 +312,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("rejects a sale with no confirmed bid", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction } = await seedLiveAuction(store);
       await expect(store.live.sell(auction.id)).rejects.toThrow("no active round");
@@ -323,7 +324,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("scenario 10+18: ends explicitly only between resolved rounds; unpresented stay unassigned", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction, ids } = await seedLiveAuctionWithGold(store, 1, 1);
       // Fresh auction is not ready to end.
@@ -362,7 +363,7 @@ describe("live round store", () => {
   }, 30000);
 
   it("scenario 8: full team cannot bid; scheduled full team transfers the opening with a pass", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const { auction } = await seedLiveAuctionWithGold(store, 20, 20, 8);
       // A wins the first four candidates: unanswered when scheduled,
@@ -405,12 +406,12 @@ describe("live round store", () => {
   }, 30000);
 
   it("rejects live actions on drafts and missing auctions", async () => {
-    const store = await PgStore.connect(DATABASE_URL);
+    const store = await ownedStore(DATABASE_URL);
     try {
       const draft = await store.saveAuction("Taslak", null);
       await expect(store.live.getLive(draft.id)).rejects.toThrow("auction not started");
       await expect(store.live.sendNext(draft.id)).rejects.toThrow("auction not started");
-      await expect(store.live.getLive("missing")).rejects.toThrow("auction not found");
+      await expect(store.live.getLive("missing")).rejects.toThrow("not found");
     } finally {
       await store.close();
     }
