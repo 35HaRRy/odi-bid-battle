@@ -15,8 +15,23 @@
   "headers": [
     { "source": "/(.*)", "headers": [{ "key": "Referrer-Policy", "value": "no-referrer" }] }
   ],
+  "redirects": [
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": { "neq": "odibb.hayrihabip.com" } }],
+      "destination": "https://odibb.hayrihabip.com/",
+      "permanent": false
+    },
+    {
+      "source": "/:path((?!api(?:/|$)).*)",
+      "has": [{ "type": "host", "value": { "neq": "odibb.hayrihabip.com" } }],
+      "destination": "https://odibb.hayrihabip.com/:path*",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/index" },
+    { "source": "/auth/:path*", "destination": "/api/index" },
     { "source": "/account/:path*", "destination": "/index.html" },
     { "source": "/app", "destination": "/index.html" }
   ]
