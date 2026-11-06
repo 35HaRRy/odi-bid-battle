@@ -58,9 +58,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const stripped = url.replace(/^\/api(?=\/|$)/, "") || "/";
     req.url = stripped;
     app(req, res);
-  } catch {
+  } catch (error) {
+    // Log only messages: init failures hide the cause, which makes bad env
+    // values unauditable from the platform logs.
+    const cause = (error as { cause?: { message?: string } }).cause;
     // eslint-disable-next-line no-console
-    console.error("api init failed");
+    console.error("api init failed:", (error as Error).message, cause?.message ?? "");
     res.status(500).json({ error: "service unavailable" });
   }
 }
