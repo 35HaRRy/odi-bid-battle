@@ -115,14 +115,17 @@ export function AccountScreen({ owner, mode, token, lang, onMode, identifier: em
     return () => { operation.current++; };
   }, [mode]);
   const view = state.view;
+  const googleResult = typeof window === "undefined" ? null : new URL(window.location.href).searchParams.get("google");
+  const linkRequired = googleResult === "link_required" && mode === "login";
+  const googleMessage = ["invalid", "link_required", "unavailable"].includes(googleResult ?? "") ? t(lang, `auth_google_${googleResult}`) : "";
   const mail = !!view?.mailEnabled;
   const google = !!view?.googleEnabled;
   const invalidToken = (mode === "reset" || mode === "verify") && !token;
   const passwordNeeded = ["login", "register", "reset", "reauth"].includes(mode);
-  const emailNeeded = ["login", "register", "forgot"].includes(mode);
+  const emailNeeded = ["login", "register", "forgot"].includes(mode) && !(linkRequired && view?.user);
   const unavailable = !mail && ["register", "forgot"].includes(mode);
   const disabled = pending || state.busy || !view || unavailable || invalidToken || consumed;
-  const title = t(lang, `auth_${mode}`);
+  const title = t(lang, linkRequired ? "auth_google_confirm" : `auth_${mode}`);
   const returnTo = typeof window === "undefined" ? "/app" : postLoginDestination(new URL(window.location.href));
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -134,7 +137,21 @@ export function AccountScreen({ owner, mode, token, lang, onMode, identifier: em
     const current = ++operation.current;
     setPending(true); setError(""); setMessage("");
     try {
-      if (mode === "login") await owner.run(() => authApi.login(email, password));
+      if (mode === "login") {
+        if (!linkRequired || !view?.user) await owner.run(() => authApi.login(email, password));
+        if (current !== operation.current || !owner.snapshot().view?.user) return;
+        if (linkRequired) {
+          await authApi.reauthenticate(password);
+          if (current !== operation.current) return;
+          const result = await authApi.linkGoogle(returnTo);
+          if (current === operation.current) window.location.assign(result.url);
+          return;
+        }
+        if (googleResult) {
+          window.history.replaceState(null,"",returnTo);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }
+      }
       else if (mode === "register") { await authApi.register({ username, email, password }); }
       else if (mode === "forgot") await authApi.forgotPassword(email);
       else if (mode === "reset") {
@@ -175,6 +192,7 @@ export function AccountScreen({ owner, mode, token, lang, onMode, identifier: em
       {state.expired && <p role="status">{t(lang, "auth_expired")}</p>}
       {invalidToken && <p role="status">{t(lang, "auth_invalidToken")}</p>}
       {unavailable && <p role="status">{t(lang, "auth_mailUnavailable")}</p>}
+      {googleMessage && <p className="account-error" role="alert">{googleMessage}</p>}
       {error && <p className="account-error" role="alert">{error}</p>}
       {message && <p role="status">{message}</p>}
       {!invalidToken && !consumed && <form onSubmit={submit} aria-busy={pending}>
@@ -184,7 +202,8 @@ export function AccountScreen({ owner, mode, token, lang, onMode, identifier: em
         <button className="primary" type="submit" disabled={disabled || ((mode === "link" || mode === "reauth") && !google)}>{pending ? t(lang, "auth_working") : title}</button>
       </form>}
       {(mode === "login" || mode === "register") && <>
-        {google ? <a className="account-google" href={authApi.googleStartUrl(returnTo)}><img src="/google-g.png" width={20} height={20} alt="" /><span>{t(lang, "auth_google")}</span></a> : <p className="account-note">{t(lang, "auth_googleUnavailable")}</p>}
+        {google && !linkRequired ? <a className="account-google" href={authApi.googleStartUrl(returnTo)}><img src="/google-g.png" width={20} height={20} alt="" /><span>{t(lang, "auth_google")}</span></a> : !google && <p className="account-note">{t(lang, "auth_googleUnavailable")}</p>}
+        {googleMessage && view?.user && <a className="account-action" href={returnTo}>{t(lang, "auth_google_skip")}</a>}
         <nav className="account-links" aria-label={t(lang, "auth_account")}>
           <button type="button" className="account-action" disabled={pending} onClick={() => onMode(mode === "login" ? "register" : "login")}><Icon name={mode === "login" ? "register" : "login"} /><span>{t(lang, mode === "login" ? "auth_register" : "auth_login")}</span></button>
           <button type="button" className="account-action" disabled={pending} onClick={() => onMode("forgot")}><Icon name="key" /><span>{t(lang, "auth_forgot")}</span></button>
@@ -237,7 +256,7 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
   const account = route.pathname.startsWith("/account");
   const publicRoot = route.pathname === "/" && !route.searchParams.has("tab");
   const sensitive = mode === "reset" || mode === "verify";
-  const showWorkspace = !publicRoot && !!state.view?.user && !state.busy && (!account || (!sensitive && mode !== "link" && mode !== "reauth"));
+  const showWorkspace = !publicRoot && !!state.view?.user && !state.busy && (!account || (!route.searchParams.has("google") && !sensitive && mode !== "link" && mode !== "reauth"));
   useEffect(() => {
     if (!initialized || state.busy || state.view?.user || state.blocked) return;
     if (route.pathname !== "/app" && !(route.pathname === "/" && route.searchParams.has("tab"))) return;

@@ -81,6 +81,10 @@ describe("Google OIDC protocol and linking", () => {
     return { request, start, cookies };
   }
   async function count(table: string) { return Number((await pool.query(`SELECT count(*) FROM ${table}`)).rows[0].count); }
+  function expectGoogleError(response: Response, reason: "invalid" | "link_required" | "unavailable") {
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(`${origin}/account?google=${reason}`);
+  }
   it("advertises validated configuration without discovery or secrets", async () => {
     const b=await browser(); expect(await (await b.request("/auth/session")).json()).toMatchObject({googleEnabled:true,user:null});
     expect(()=>loadAuthConfig({ GOOGLE_CLIENT_ID:"incomplete" })).toThrow();
@@ -95,7 +99,7 @@ describe("Google OIDC protocol and linking", () => {
     expect(row.verifier_ciphertext).not.toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect((await b.request(flow.callback)).status).toBe(302);
     expect(await (await b.request("/auth/session")).json()).toMatchObject({user:{email:"google@example.test"}});
-    expect((await b.request(flow.callback)).status).toBe(400);
+    expectGoogleError(await b.request(flow.callback),"invalid");
     expect(await count("auth_sessions")).toBe(1); expect(await count("auth_google_identities")).toBe(1); expect(await count("auth_oauth_states")).toBe(0);
     expect(JSON.stringify((await pool.query("SELECT * FROM auth_google_identities")).rows)).not.toContain("ephemeral-test-token");
   });
@@ -109,26 +113,54 @@ describe("Google OIDC protocol and linking", () => {
     if(mode==="unverified") claims.email_verified=false;
     if(mode==="missing-email") claims.email=null;
     if(mode==="userinfo-subject") userinfoSubject="other";
-    const b=await browser(), flow=await b.start(); expect((await b.request(flow.callback)).status).toBe(400);
+    const b=await browser(), flow=await b.start(); expectGoogleError(await b.request(flow.callback),"invalid");
     expect(await count("auth_sessions")).toBe(0); expect(await count("auth_google_identities")).toBe(0); expect(await count("auth_oauth_states")).toBe(0);
   });
   it("rejects expired and browser-unbound state and concurrent callback consumption", async () => {
     const a=await browser(), b=await browser(), first=await a.start();
-    expect((await b.request(first.callback)).status).toBe(400);
+    expectGoogleError(await b.request(first.callback),"invalid");
     await pool.query("UPDATE auth_oauth_states SET expires_at=now()-interval '1 second'");
-    expect((await a.request(first.callback)).status).toBe(400); expect(await count("auth_oauth_states")).toBe(0);
+    expectGoogleError(await a.request(first.callback),"invalid"); expect(await count("auth_oauth_states")).toBe(0);
     const flow=await a.start(); const responses=await Promise.all([a.request(flow.callback),a.request(flow.callback)]);
-    expect(responses.map(r=>r.status).sort()).toEqual([302,400]); expect(await count("auth_sessions")).toBe(1);
+    expect(responses.filter(r=>r.headers.get("location") === origin+"/app")).toHaveLength(1);
+    expectGoogleError(responses.find(r=>r.headers.get("location") !== origin+"/app")!,"invalid"); expect(await count("auth_sessions")).toBe(1);
   });
   it("refuses matching-email takeover and generates different valid usernames", async () => {
     await createVerifiedUser(pool,"google");
-    const b=await browser(), first=await b.start(); expect((await b.request(first.callback)).status).toBe(409);
+    const b=await browser(), first=await b.start(); expectGoogleError(await b.request(first.callback),"link_required");
     expect(await count("auth_google_identities")).toBe(0);
     claims.email="one@example.test"; const second=await b.start(); expect((await b.request(second.callback)).status).toBe(302);
     await b.request("/auth/session"); await b.request("/auth/logout",{}); claims={email:"two@example.test",sub:"subject-2"}; userinfoSubject="subject-2";
     const third=await b.start(); expect((await b.request(third.callback)).status).toBe(302);
     const users=(await pool.query("SELECT username FROM app_users WHERE username<>'legacy'")).rows.map(r=>r.username);
     expect(new Set(users).size).toBe(3); for(const username of users) expect(username).toMatch(/^[a-z0-9_]{3,32}$/);
+  });
+  it.each([
+    {email:"owner@gmail.com"},
+    {email:"owner@workspace.test",hd:"workspace.test"},
+  ])("automatically links authoritative Google email $email to the existing verified account", async identity => {
+    const user=await createVerifiedUser(pool,"owner");
+    await pool.query("UPDATE app_users SET email=$1 WHERE id=$2",[identity.email,user.id]);
+    claims=identity;
+    const b=await browser(), flow=await b.start();
+    const response=await b.request(flow.callback);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(origin+"/app");
+    expect(await (await b.request("/auth/session")).json()).toMatchObject({user:{id:user.id}});
+    expect((await pool.query("SELECT user_id FROM auth_google_identities")).rows).toEqual([{user_id:user.id}]);
+    expect(await count("app_users")).toBe(2);
+  });
+  it.each(["disabled", "unverified", "already-linked"])("does not automatically claim a %s account", async mode => {
+    const user=await createVerifiedUser(pool,"owner");
+    await pool.query("UPDATE app_users SET email='owner@gmail.com' WHERE id=$1",[user.id]);
+    if (mode === "disabled") await pool.query("UPDATE app_users SET disabled_at=now() WHERE id=$1",[user.id]);
+    if (mode === "unverified") await pool.query("UPDATE app_users SET email_verified_at=NULL WHERE id=$1",[user.id]);
+    if (mode === "already-linked") await pool.query("INSERT INTO auth_google_identities (issuer,subject,user_id) VALUES ('https://accounts.google.com','another-subject',$1)",[user.id]);
+    claims={email:"owner@gmail.com"};
+    const b=await browser(), flow=await b.start();
+    expectGoogleError(await b.request(flow.callback),mode === "already-linked" ? "link_required" : "unavailable");
+    expect(await count("auth_sessions")).toBe(0);
+    expect(await count("auth_google_identities")).toBe(mode === "already-linked" ? 1 : 0);
   });
   it("requires authenticated CSRF and recent password reauthentication bound to the exact session for linking", async () => {
     await createVerifiedUser(pool,"local"); const a=await browser(), b=await browser();
@@ -139,7 +171,7 @@ describe("Google OIDC protocol and linking", () => {
     expect((await a.request("/auth/reauthenticate",{password:"fixture-password"})).status).toBe(204);
     expect((await a.request("/auth/google/link",{}, {"X-CSRF-Token":""})).status).toBe(403);
     const flow=await a.start(true); b.cookies.set("odi_google_tx",a.cookies.get("odi_google_tx")!);
-    expect((await b.request(flow.callback)).status).toBe(400);
+    expectGoogleError(await b.request(flow.callback),"invalid");
     const next=await a.start(true); expect((await a.request(next.callback)).status).toBe(302);
     expect((await pool.query("SELECT user_id FROM auth_google_identities")).rows[0].user_id).toBe((await pool.query("SELECT id FROM app_users WHERE username='local'")).rows[0].id);
     await pool.query("UPDATE auth_sessions SET reauthenticated_at=now()-interval '6 minutes'");
@@ -149,22 +181,22 @@ describe("Google OIDC protocol and linking", () => {
     await createVerifiedUser(pool,"local"); const b=await browser();
     await b.request("/auth/login",{login:"local",password:"fixture-password"}); await b.request("/auth/reauthenticate",{password:"fixture-password"});
     const flow=await b.start(true); await pool.query("UPDATE auth_sessions SET reauthenticated_at=now()-interval '6 minutes'");
-    expect((await b.request(flow.callback)).status).toBe(403);
+    expectGoogleError(await b.request(flow.callback),"unavailable");
     await b.request("/auth/reauthenticate",{password:"fixture-password"}); const next=await b.start(true); await b.request("/auth/logout",{});
-    expect((await b.request(next.callback)).status).toBe(400); expect(await count("auth_google_identities")).toBe(0);
-    const login=await b.start(false,"?returnTo=https://evil.test"); expect((await b.request(login.callback)).headers.get("location")).toBe(origin+"/");
+    expectGoogleError(await b.request(next.callback),"invalid"); expect(await count("auth_google_identities")).toBe(0);
+    const login=await b.start(false,"?returnTo=https://evil.test"); expect((await b.request(login.callback)).headers.get("location")).toBe(origin+"/app");
   });
   it("fails closed for malformed, unknown, duplicated state/cookies and encrypted verifier tampering", async () => {
     const b=await browser(), flow=await b.start();
     for (const query of ["state=bad",`state=${"x".repeat(43)}`,`state=${flow.url.searchParams.get("state")}&state=duplicate`]) {
-      expect((await b.request("/auth/google/callback?code=unused&"+query)).status).toBe(400);
+      expectGoogleError(await b.request("/auth/google/callback?code=unused&"+query),"invalid");
     }
     const value=b.cookies.get("odi_google_tx");
-    expect((await b.request(flow.callback,undefined,{Cookie:`odi_google_tx=${value}; odi_google_tx=${value}`})).status).toBe(400);
+    expectGoogleError(await b.request(flow.callback,undefined,{Cookie:`odi_google_tx=${value}; odi_google_tx=${value}`}),"invalid");
     const row=(await pool.query("SELECT verifier_ciphertext FROM auth_oauth_states")).rows[0];
     const bytes=Buffer.from(row.verifier_ciphertext,"base64url"); bytes[30]^=1;
     await pool.query("UPDATE auth_oauth_states SET verifier_ciphertext=$1",[bytes.toString("base64url")]);
-    expect((await b.request(flow.callback)).status).toBe(400); expect(await count("auth_sessions")).toBe(0);
+    expectGoogleError(await b.request(flow.callback),"invalid"); expect(await count("auth_sessions")).toBe(0);
   });
   it("uses immutable issuer/subject on repeat sign-in, rejects disabled users and never asks for offline tokens", async () => {
     const b=await browser(), first=await b.start();
@@ -176,7 +208,7 @@ describe("Google OIDC protocol and linking", () => {
     expect((await pool.query("SELECT user_id FROM auth_google_identities")).rows[0].user_id).toBe(id);
     await b.request("/auth/session"); await b.request("/auth/logout",{});
     await pool.query("UPDATE app_users SET disabled_at=now() WHERE id=$1",[id]);
-    const disabled=await b.start(); expect((await b.request(disabled.callback)).status).toBe(403);
+    const disabled=await b.start(); expectGoogleError(await b.request(disabled.callback),"unavailable");
     expect(await count("auth_google_identities")).toBe(1);
   });
   it("cannot link another user's Google identity or replace an existing link", async () => {
@@ -186,11 +218,11 @@ describe("Google OIDC protocol and linking", () => {
     expect((await b.request("/auth/login",{login:"local",password:"fixture-password"})).status).toBe(200);
     expect((await b.request("/auth/google/start")).status).toBe(409);
     await b.request("/auth/reauthenticate",{password:"fixture-password"});
-    const conflict=await b.start(true); expect((await b.request(conflict.callback)).status).toBe(409);
+    const conflict=await b.start(true); expectGoogleError(await b.request(conflict.callback),"link_required");
     claims.sub="subject-2"; userinfoSubject="subject-2";
     const linked=await b.start(true); expect((await b.request(linked.callback)).status).toBe(302);
     claims.sub="subject-3"; userinfoSubject="subject-3";
-    const replacement=await b.start(true); expect((await b.request(replacement.callback)).status).toBe(409);
+    const replacement=await b.start(true); expectGoogleError(await b.request(replacement.callback),"link_required");
     expect(await count("auth_google_identities")).toBe(2);
   });
   it("serializes simultaneous competing links to the same issuer/subject", async () => {
@@ -205,7 +237,8 @@ describe("Google OIDC protocol and linking", () => {
     const both = new Promise<void>(resolve => { release = resolve; });
     tokenGate = async () => { if (++arrived === 2) release(); await both; };
     const responses = await Promise.all(browsers.map((b, i) => b.request(flows[i].callback)));
-    expect(responses.map(r => r.status).sort()).toEqual([302, 409]);
+    expect(responses.filter(r=>r.headers.get("location") === origin+"/app")).toHaveLength(1);
+    expectGoogleError(responses.find(r=>r.headers.get("location") !== origin+"/app")!,"link_required");
     expect(await count("auth_google_identities")).toBe(1);
   });
   it.each(["reset", "logout"])("callback rechecks session locks after concurrent %s during exchange", async mode => {
@@ -228,7 +261,7 @@ describe("Google OIDC protocol and linking", () => {
         expect(await auth.consumePasswordResetToken(token, "replacement-password")).toBe(true);
       }
     } finally { release(); }
-    expect((await callback).status).toBe(403);
+    expectGoogleError(await callback,"unavailable");
     expect(await count("auth_google_identities")).toBe(0);
     expect(await count("auth_sessions")).toBe(0);
   });

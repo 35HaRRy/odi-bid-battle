@@ -57,6 +57,15 @@ describe("account routes", () => {
     expect(login).toContain('autoComplete="username"');
     expect(login).toContain("Google sign-in is unavailable");
   });
+  it("shows Google callback failures inside the frontend without rendering arbitrary URL text", () => {
+    vi.stubGlobal("window", { location: { href: "https://example.test/account?google=invalid" } });
+    const props = { owner: new SessionOwner(), mode: "login" as const, token: "", lang: "tr" as const, onMode: () => {}, identifier: "", onIdentifierChange: () => {} };
+    const html = renderToStaticMarkup(createElement(AccountScreen, props));
+    expect(html).toContain("Google ile giriş tamamlanamadı");
+    expect(html).toContain('role="alert"');
+    vi.stubGlobal("window", { location: { href: "https://example.test/account?google=private-provider-error" } });
+    expect(renderToStaticMarkup(createElement(AccountScreen, props))).not.toContain("private-provider-error");
+  });
   it("uses logo branding, an official Google mark and compact icon account actions", async () => {
     const owner = new SessionOwner();
     await owner.run(async () => ({ ...view(null), googleEnabled: true, mailEnabled: true }));
@@ -71,6 +80,39 @@ describe("account routes", () => {
   });
 });
 describe("session ownership", () => {
+  it.each(["invalid", "unavailable"])("clears a Google %s result after successful password login so the workspace can open", async reason => {
+    const owner = new SessionOwner();
+    await owner.run(async () => view(null));
+    vi.spyOn(authApi, "login").mockResolvedValue(view("alice"));
+    const replaceState=vi.fn(), dispatchEvent=vi.fn();
+    vi.stubGlobal("window", { location:{href:`https://example.test/account?google=${reason}&returnTo=%2Fapp%3Ftab%3Dlive`},history:{replaceState},dispatchEvent });
+    vi.stubGlobal("PopStateEvent", class { constructor(public type: string) {} });
+    hooks.values=[];
+    const render=()=>{hooks.cursor=0;return AccountScreen({owner,mode:"login",token:"",lang:"en",onMode:()=>{},identifier:"alice",onIdentifierChange:()=>{}});};
+    const input=elements(render()).find(el=>el.props.name === "password")!;
+    (input.props.onChange as (event: unknown)=>void)({target:{value:"fixture-password"}});
+    const submit=elements(render()).find(el=>el.type === "form")!.props.onSubmit as (event: unknown)=>Promise<void>;
+    await submit({preventDefault(){}});
+    expect(replaceState).toHaveBeenCalledWith(null,"","/app?tab=live");
+    expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({type:"popstate"}));
+  });
+  it("continues a manual Google link after password login without sending the user to account settings", async () => {
+    const owner = new SessionOwner();
+    await owner.run(async () => ({ ...view(null), googleEnabled: true }));
+    vi.spyOn(authApi, "login").mockResolvedValue({ ...view("alice"), googleEnabled: true });
+    const reauthenticate = vi.spyOn(authApi, "reauthenticate").mockResolvedValue();
+    vi.spyOn(authApi, "linkGoogle").mockResolvedValue({url:"https://accounts.google.com/authorize"});
+    const assign = vi.fn();
+    vi.stubGlobal("window", { location: { href: "https://example.test/account?google=link_required", assign } });
+    hooks.values = [];
+    const render = () => { hooks.cursor = 0; return AccountScreen({owner,mode:"login",token:"",lang:"en",onMode:()=>{},identifier:"alice",onIdentifierChange:()=>{}}); };
+    const input = elements(render()).find(el=>el.props.name === "password")!;
+    (input.props.onChange as (event: unknown)=>void)({target:{value:"fixture-password"}});
+    const submit = elements(render()).find(el=>el.type === "form")!.props.onSubmit as (event: unknown)=>Promise<void>;
+    await submit({preventDefault(){}});
+    expect(reauthenticate).toHaveBeenCalledWith("fixture-password");
+    expect(assign).toHaveBeenCalledWith("https://accounts.google.com/authorize");
+  });
   it.each(["login", "register", "reset"] as const)("%s accepts 65 non-BMP password characters without native truncation and rejects 129 code points", async mode => {
     const owner = new SessionOwner();
     await owner.run(async () => ({ ...view(null), mailEnabled: true }));

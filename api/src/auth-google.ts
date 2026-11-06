@@ -57,14 +57,16 @@ export function mountGoogleAuth(app: Express, auth: AuthStore, config: GoogleAut
     }));
   }
   app.get("/auth/google/callback",asyncRoute(async(req,res)=>{
+    const fail = (reason: "invalid" | "link_required" | "unavailable") => res.redirect(new URL(`/account?google=${reason}`,config.appUrl).href);
+    try {
     const state=req.query.state, browser=cookie(req,transactionCookie);
-    if (typeof state !== "string" || !opaque.test(state) || !opaque.test(browser)) return error(res,400,"Invalid or expired Google sign-in");
+    if (typeof state !== "string" || !opaque.test(state) || !opaque.test(browser)) return fail("invalid");
     const record=await auth.consumeOAuthState(state,browser);
-    if (!record) return error(res,400,"Invalid or expired Google sign-in");
+    if (!record) return fail("invalid");
     res.cookie(transactionCookie,"",options(config,0));
-    if (record.link_user_id && (res.locals.user?.id !== record.link_user_id || hashToken(res.locals.sessionToken) !== record.link_session_hash)) return error(res,400,"Invalid or expired Google sign-in");
-    if (!record.link_user_id && res.locals.user) return error(res,400,"Invalid or expired Google sign-in");
-    let identity: {issuer:string;subject:string;email:string};
+    if (record.link_user_id && (res.locals.user?.id !== record.link_user_id || hashToken(res.locals.sessionToken) !== record.link_session_hash)) return fail("invalid");
+    if (!record.link_user_id && res.locals.user) return fail("invalid");
+    let identity: {issuer:string;subject:string;email:string;hostedDomain?:string};
     try {
       const provider=await client();
       // Use the configured callback origin/path, never Host or forwarded request headers.
@@ -75,12 +77,15 @@ export function mountGoogleAuth(app: Express, auth: AuthStore, config: GoogleAut
       const info=await oidc.fetchUserInfo(provider,tokens.access_token,claims.sub);
       if (claims.email_verified !== true || info.email_verified !== true || typeof claims.email !== "string" ||
         typeof info.email !== "string" || claims.email.toLowerCase() !== info.email.toLowerCase() || !isAccountEmail(claims.email.toLowerCase())) throw new Error("Unverified Google email");
-      identity={issuer:claims.iss,subject:claims.sub,email:claims.email.toLowerCase()};
-    } catch { return error(res,400,"Invalid or expired Google sign-in"); }
+      identity={issuer:claims.iss,subject:claims.sub,email:claims.email.toLowerCase(),
+        hostedDomain:typeof claims.hd === "string" && claims.hd.trim() ? claims.hd : undefined};
+    } catch { return fail("invalid"); }
     const result=await auth.finishGoogleIdentity(identity,record.link_user_id ? {userId:record.link_user_id,sessionHash:record.link_session_hash!} : undefined);
-    if (result.status === 409) return error(res,409,"Sign in to your existing account, then explicitly link Google from account settings");
-    if (result.status === 403) return error(res,403,"Account unavailable or recent password reauthentication required");
+    if (result.status === 409) return fail("link_required");
+    if (result.status === 403) return fail("unavailable");
     if (result.status === 200) await establishSession(res,auth,config,result.token);
-    return res.redirect(new URL(returnPath(record.return_path,config),config.appUrl).href);
+    const destination=returnPath(record.return_path,config);
+    return res.redirect(new URL(destination === "/" ? "/app" : destination,config.appUrl).href);
+    } catch { return fail("unavailable"); }
   }));
 }

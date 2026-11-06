@@ -129,7 +129,7 @@ export class AuthStore {
     return result.rows[0] ?? null;
   }
 
-  async finishGoogleIdentity(identity: {issuer:string;subject:string;email:string}, link?: {userId:string;sessionHash:string}) {
+  async finishGoogleIdentity(identity: {issuer:string;subject:string;email:string;hostedDomain?:string}, link?: {userId:string;sessionHash:string}) {
     if (identity.issuer !== "https://accounts.google.com" || !identity.subject || identity.subject.length>255 || !isAccountEmail(identity.email)) throw new Error("Invalid Google identity");
     return this.transaction(async client=>{
       // Serialize first sign-in and linking for this immutable issuer/subject, not its mutable email.
@@ -147,12 +147,20 @@ export class AuthStore {
       } else if (existing.rowCount) {
         userId=existing.rows[0].user_id;
       } else {
-        // ON CONFLICT also handles concurrent registrations; never claim an existing email.
+        // Only Gmail or a signed Workspace domain proves current mailbox ownership.
+        const authoritative = identity.email.endsWith("@gmail.com") || !!identity.hostedDomain;
         userId=randomUUID();
         const username=`google_${userId.replaceAll("-","").slice(0,24)}`;
         const created = await client.query(`INSERT INTO app_users (id,username,email,email_verified_at)
           VALUES ($1,$2,$3,clock_timestamp()) ON CONFLICT DO NOTHING RETURNING id`,[userId,username,identity.email]);
-        if (!created.rowCount) return {status:409 as const};
+        if (!created.rowCount) {
+          if (!authoritative) return {status:409 as const};
+          const matching = await client.query("SELECT id FROM app_users WHERE email=$1 FOR UPDATE",[identity.email]);
+          if (!matching.rowCount) return {status:409 as const};
+          userId=matching.rows[0].id;
+          const other = await client.query("SELECT subject FROM auth_google_identities WHERE user_id=$1",[userId]);
+          if (other.rowCount) return {status:409 as const};
+        }
       }
       const user = await client.query<AuthUser>(`SELECT id,username,email FROM app_users WHERE id=$1
         AND disabled_at IS NULL AND email_verified_at IS NOT NULL FOR UPDATE`,[userId]);
