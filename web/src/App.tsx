@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api, type Auction, type Candidate, type CandidateList, type CandidateContext } from "./api";
-import { getLang, setLang, t, type Lang } from "./i18n";
+import { getLang, t, type Lang } from "./i18n";
 import { Modal } from "./modal";
 import { ImageField } from "./image-field";
 import { ImagePreview } from "./image-preview";
@@ -15,8 +15,9 @@ import {
 } from "./catalog-scroll";
 import type { FieldError } from "./api";
 import { PublicFilter, ShareField, canEdit } from "./sharing";
+import { StatisticsPage } from "./statistics";
 
-type Tab = "auctions" | "catalog" | "lists" | "draft" | "live" | "result" | "battlefields";
+type Tab = "auctions" | "catalog" | "lists" | "draft" | "live" | "result" | "battlefields" | "statistics";
 
 const TABS: readonly Tab[] = [
   "auctions",
@@ -26,6 +27,7 @@ const TABS: readonly Tab[] = [
   "live",
   "result",
   "battlefields",
+  "statistics",
 ];
 
 function isTab(value: string | null): value is Tab {
@@ -87,14 +89,6 @@ function useMissingCandidateNames(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(references), candidates.length]);
   return extra;
-}
-
-function TreeMark() {
-  return (
-    <svg viewBox="0 0 38 43" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M19 4v35M9 14l10 8 10-8M9 24l10 7 10-7" />
-    </svg>
-  );
 }
 
 function Status({ msg }: { msg: string | null }) {
@@ -222,15 +216,17 @@ function AppHeading({
   title,
   intro,
   action,
+  headingRef,
 }: {
   title: string;
   intro: string;
   action?: React.ReactNode;
+  headingRef?: React.RefObject<HTMLHeadingElement>;
 }) {
   return (
     <div className="app-heading">
       <div>
-        <h1>{title}</h1>
+        <h1 ref={headingRef}>{title}</h1>
         <p>{intro}</p>
       </div>
       {action && <div className="header-tools">{action}</div>}
@@ -819,10 +815,13 @@ export function Lists({
   const [targetListId, setTargetListId] = useState("");
   const [adding, setAdding] = useState(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const selectionCleared = useRef(false);
   const active = lists.find((l) => l.id === activeId) ?? (retainedList?.id === activeId ? retainedList : null);
   const editable = !!active && canEdit(active, userId);
   const ownLists = lists.filter(l => canEdit(l, userId));
   const targetList = ownLists.find(l => l.id === targetListId) ?? ownLists.find(l => !l.isPublic) ?? ownLists[0];
+  const entryList = editable ? active : targetList;
   const visibleLists = lists.filter(l => canEdit(l, userId) || (includePublic && l.isPublic));
   const references = [...lists, ...(active ? [active] : [])].flatMap((l) => l.entries.map((id) => ({ id, context: { listId: l.id } })));
   const extraNames = useMissingCandidateNames(candidates, references, () => {});
@@ -840,7 +839,7 @@ export function Lists({
         if (!live) return;
         setLists(ls);
         setLoadError(false);
-        setActiveId((a) => a ?? ls[0]?.id ?? null);
+        setActiveId((a) => selectionCleared.current ? a : a ?? ls[0]?.id ?? null);
       })
       .catch(() => { if (live) setLoadError(true); });
     return () => { live = false; };
@@ -891,7 +890,7 @@ export function Lists({
   async function mutate(p: Promise<CandidateList>) {
     try {
       const updated = await p;
-      setRetainedList(updated);
+      setRetainedList(previous => previous?.id === updated.id ? updated : previous);
       setLists((ls) => ls.map((l) => (l.id === updated.id ? updated : l)));
       onError(null);
       return true;
@@ -904,7 +903,7 @@ export function Lists({
   }
 
   async function createAndAdd() {
-    if (!active || !newName.trim() || !newFile) return;
+    if (!entryList || !newName.trim() || !newFile) return;
     try {
       const c = await api.createCandidate(newName, newFile, entryPublic);
       onCandidates([...candidates, c]);
@@ -912,7 +911,7 @@ export function Lists({
       setNewFile(null);
       setShowCreateEntry(false);
       setEntryPublic(false);
-      await mutate(api.addEntry(active.id, c.id));
+      await mutate(api.addEntry(entryList.id, c.id));
     } catch {
       onError(t(lang, "persistFail"));
     }
@@ -940,10 +939,10 @@ export function Lists({
   }
 
   async function saveEntryEdit(name: string, file: File | null) {
-    if (!active || !editingId) return;
+    if (!entryList || !editingId) return;
     try {
       const { candidate, list } = await api.editListEntry(
-        active.id,
+        entryList.id,
         editingId,
         name,
         file,
@@ -986,13 +985,14 @@ export function Lists({
   }
 
   const valid =
-    !!active && active.entries.length >= 4 && active.entries.length % 2 === 0;
+    !!entryList && entryList.entries.length >= 4 && entryList.entries.length % 2 === 0;
 
   return (
     <section className="route-lists">
       <Status msg={loadError ? t(lang, "persistFail") : null} />
       <AppHeading
         title={t(lang, "lists")}
+        headingRef={headingRef}
         intro={t(lang, "listsIntro")}
         action={
           <button className="primary" onClick={() => setShowCreateList(true)}>
@@ -1069,6 +1069,11 @@ export function Lists({
               <button
                 className="secondary small-btn"
                 onClick={() => {
+                  if (!editable || !canEdit(l, userId)) {
+                    closeCreateEntry();
+                    setEditingId(null);
+                  }
+                  selectionCleared.current = false;
                   setActiveId(l.id);
                   scrollToEditor();
                 }}
@@ -1106,25 +1111,71 @@ export function Lists({
               setEditingScope("catalog");
             }}
           />}
-          <section>
+          {!editable && <section>
             <div className="selected-head">
               <h3>{active.name || t(lang, "draft")}</h3>
-              <span className="mini-label">
-                {active.entries.length} {t(lang, "candidates")}
-              </span>
+              <span className="mini-label">{active.entries.length} {t(lang, "candidates")}</span>
+              <button
+                type="button"
+                className="icon-button clear-list-selection"
+                title={t(lang, "clearSelection")}
+                aria-label={t(lang, "clearSelection")}
+                onClick={() => {
+                  selectionCleared.current = true;
+                  setActiveId(null);
+                  setRetainedList(null);
+                  closeCreateEntry();
+                  setEditingId(null);
+                  requestAnimationFrame(() => headingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+                }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+              </button>
             </div>
             <p className="source">{t(lang, "savedSource")}</p>
+            <OrderedEntries
+              lang={lang}
+              context={{ listId: active.id }}
+              readOnly
+              onAdd={targetList ? async cid => {
+                setAdding(true);
+                try { await mutate(api.addEntry(targetList.id, cid, active.id)); }
+                finally { setAdding(false); }
+              } : undefined}
+              addedIds={targetList?.entries}
+              adding={adding}
+              entries={active.entries}
+              candidates={candidates}
+              onReorder={() => {}}
+              onRemove={() => {}}
+              emptyText={t(lang, "emptyList")}
+              resolveName={resolveName}
+            />
+          </section>}
+          <section>
             {!editable && <label>{t(lang, "targetOwnList")}
-              <select aria-label={t(lang, "targetOwnList")} value={targetList?.id ?? ""} disabled={adding || !targetList} onChange={event => setTargetListId(event.target.value)}>
+              <select aria-label={t(lang, "targetOwnList")} value={targetList?.id ?? ""} disabled={adding || !targetList} onChange={event => {
+                closeCreateEntry();
+                setEditingId(null);
+                setTargetListId(event.target.value);
+              }}>
                 {!targetList && <option value="">{t(lang, "noLists")}</option>}
                 {ownLists.map(list => <option key={list.id} value={list.id}>{list.name || t(lang, "draft")} — {t(lang, list.isPublic ? "publicRecord" : "privateRecord")}</option>)}
               </select>
             </label>}
-            {editable && <div className="create-row">
+            {entryList && <>
+            <div className="selected-head">
+              <h3>{entryList.name || t(lang, "draft")}</h3>
+              <span className="mini-label">
+                {entryList.entries.length} {t(lang, "candidates")}
+              </span>
+            </div>
+            <p className="source">{t(lang, "savedSource")}</p>
+            <div className="create-row">
               <button className="secondary" onClick={() => setShowCreateEntry(true)}>
                 {t(lang, "createAndAdd")}
               </button>
-            </div>}
+            </div>
             {showCreateEntry && (
               <Modal titleId="entry-create-title" onClose={closeCreateEntry}>
                 <dialog aria-labelledby="entry-create-title">
@@ -1176,19 +1227,11 @@ export function Lists({
             )}
             <OrderedEntries
               lang={lang}
-              context={{ listId: active.id }}
-              readOnly={!editable}
-              onAdd={!editable && targetList ? async cid => {
-                setAdding(true);
-                try { await mutate(api.addEntry(targetList.id, cid, active.id)); }
-                finally { setAdding(false); }
-              } : undefined}
-              addedIds={targetList?.entries}
-              adding={adding}
-              entries={active.entries}
+              context={{ listId: entryList.id }}
+              entries={entryList.entries}
               candidates={candidates}
-              onReorder={(cid, to) => mutate(api.reorder(active.id, cid, to))}
-              onRemove={(cid) => mutate(api.removeEntry(active.id, cid))}
+              onReorder={(cid, to) => mutate(api.reorder(entryList.id, cid, to))}
+              onRemove={(cid) => mutate(api.removeEntry(entryList.id, cid))}
               onEdit={(cid) => {
                 setEditingId(cid);
                 setEditingRoot(null);
@@ -1200,6 +1243,7 @@ export function Lists({
             <p className={`validation-note ${valid ? "" : "error"}`}>
               {t(lang, valid ? "validList" : "invalidList")}
             </p>
+            </>}
           </section>
         </div>
       )}
@@ -1210,7 +1254,7 @@ export function Lists({
           description={t(lang, "candidateCopy")}
           initialName={editingName}
           initialPublic={editingScope === "catalog" ? editingCandidate?.isPublic : undefined}
-          previewUrl={api.imageUrl(editingId, editingScope === "entry" && active ? { listId: active.id } : undefined)}
+          previewUrl={api.imageUrl(editingId, editingScope === "entry" && entryList ? { listId: entryList.id } : undefined)}
           onClose={() => setEditingId(null)}
           onSave={editingScope === "entry" ? saveEntryEdit : saveCatalogEdit}
         />
@@ -2032,49 +2076,8 @@ export default function App({ userId }: { userId: string }) {
     setTab(next);
   }
 
-  function switchLang(l: Lang) {
-    setL(l);
-    setLang(l);
-  }
-
   return (
-    <div>
-      <div className="topstrip">
-        <span>2 Ordular savaşı</span>
-        <span>{t(lang, "tagline")}</span>
-      </div>
       <div className="shell">
-        <header className="masthead">
-          <div className="brand">
-            <TreeMark />
-            <div>
-              <strong>2 Ordular savaşı</strong>
-              <small>{t(lang, "tagline")}</small>
-            </div>
-          </div>
-          <div className="header-tools">
-            <div className="lang-switch" role="group" aria-label={t(lang, "language")}>
-              <button
-                type="button"
-                aria-label="Türkçe"
-                title="Türkçe"
-                aria-pressed={lang === "tr"}
-                onClick={() => switchLang("tr")}
-              >
-                <span aria-hidden="true">🇹🇷</span>
-              </button>
-              <button
-                type="button"
-                aria-label="English"
-                title="English"
-                aria-pressed={lang === "en"}
-                onClick={() => switchLang("en")}
-              >
-                <span aria-hidden="true">🇬🇧</span>
-              </button>
-            </div>
-          </div>
-        </header>
         <nav className="app-nav">
           <button
             onClick={() => navigateToTab("auctions")}
@@ -2118,6 +2121,12 @@ export default function App({ userId }: { userId: string }) {
           >
             {t(lang, "resultTitle")}
           </button>
+          <button
+            onClick={() => navigateToTab("statistics")}
+            aria-current={tab === "statistics" ? "page" : undefined}
+          >
+            {t(lang, "statistics")}
+          </button>
         </nav>
         <Status msg={error} />
         <main className="content">
@@ -2139,6 +2148,8 @@ export default function App({ userId }: { userId: string }) {
             />
           ) : tab === "battlefields" ? (
             <BattlefieldLibrary lang={lang} userId={userId} />
+          ) : tab === "statistics" ? (
+            <StatisticsPage key={userId} lang={lang} />
           ) : (
             <AuctionWorkspace
               lang={lang}
@@ -2163,6 +2174,5 @@ export default function App({ userId }: { userId: string }) {
           )}
         </main>
       </div>
-    </div>
   );
 }

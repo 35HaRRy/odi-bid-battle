@@ -26,6 +26,30 @@ function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
     ? [child, ...elements(child.props.children as ReactNode)] : []);
 }
 
+it.each(["landing", "account", "loading", "workspace", "blocked"])("keeps one shared branded header and footer on %s", async page => {
+  const owner = new SessionOwner();
+  if (page !== "loading") await owner.run(async () => ({ user: page === "workspace" || page === "blocked" ? { id: "demo", username: "demo", email: "demo@example.test" } : null, csrfToken: "synthetic", googleEnabled: true, mailEnabled: true }));
+  if (page === "blocked") await owner.logout(async () => { throw new Error("offline"); }).catch(() => {});
+  const url = new URL(`https://example.test${page === "landing" ? "/" : page === "account" ? "/account?mode=register" : "/app"}`);
+  vi.stubGlobal("window", { location: { href: url.href } });
+  hooks.values = [owner, "tr", url, "", page !== "loading", false];
+  const html = renderToStaticMarkup(SessionBoundary({ children: () => createElement("main", null, "WORKSPACE") }));
+  expect(html.match(/<header\b/g) ?? []).toHaveLength(1);
+  expect(html.match(/<footer\b/g) ?? []).toHaveLength(1);
+  expect(html).toContain('class="site-header"');
+  expect(html).toContain('class="site-footer"');
+  expect(html).toContain('src="/logo.jpg"');
+  expect(html).toContain('aria-label="English"');
+  expect(html.includes('class="account-menu"')).toBe(page === "workspace");
+  const links = [...html.matchAll(/href="(https:\/\/[^\"]+)"/g)].map(match => match[1]);
+  expect(links).toEqual([
+    "https://hayrihabip.com/", "https://github.com/35HaRRy/odibb",
+    "https://www.linkedin.com/in/hayri-habip/", "https://x.com/35_HaRRy",
+    "https://www.instagram.com/hayrihabip/",
+  ]);
+  for (const name of ["Web sitesi", "GitHub", "LinkedIn", "X", "Instagram"]) expect(html).toContain(`aria-label="${name}"`);
+});
+
 it.each(["tr", "en"] as const)("renders the four-stage public story and accessible CTA in %s without requests", lang => {
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
   const html = renderToStaticMarkup(createElement(LandingPage, { lang, onStart() {} }));

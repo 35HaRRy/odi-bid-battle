@@ -35,7 +35,6 @@ export function LandingPage({ lang, onStart }: { lang: Lang; onStart: () => void
   useEffect(() => root.current ? observeLanding(root.current) : undefined, []);
   const screenshots = ["catalog", "teams", "divan"];
   return <main className="landing-page" ref={root}>
-    <header className="landing-brand"><a href="/">2 Ordular savaşı</a><span>{t(lang, "landing_tagline")}</span></header>
     <section className="landing-hero" aria-labelledby="landing-title">
       <div className="landing-hero-copy">
         <h1 id="landing-title">{t(lang, "landing_title")}<em>{t(lang, "landing_titleEnd")}</em></h1>
@@ -57,6 +56,6 @@ export function LandingPage({ lang, onStart }: { lang: Lang; onStart: () => void
         </article>)}
       </div>
     </section>
-    <footer className="landing-close"><h2>{t(lang, "landing_close")}</h2><p>{t(lang, "landing_closeIntro")}</p><button className="primary" type="button" onClick={onStart}>{t(lang, "landing_start")}</button><a href="#landing-title">{t(lang, "landing_top")}</a></footer>
+    <section className="landing-close" aria-labelledby="landing-close-title"><h2 id="landing-close-title">{t(lang, "landing_close")}</h2><p>{t(lang, "landing_closeIntro")}</p><button className="primary" type="button" onClick={onStart}>{t(lang, "landing_start")}</button><a href="#landing-title">{t(lang, "landing_top")}</a></section>
   </main>;
 }

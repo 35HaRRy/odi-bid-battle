@@ -3,13 +3,15 @@ import { authApi, setSessionCsrf, subscribeUnauthorized, type AuthUser, type Ses
 import { ApiError } from "./api-transport";
 import { getLang, setLang, t, type Lang } from "./i18n";
 import { LandingPage } from "./landing";
+import { Icon } from "./icons";
+import { SiteFooter, SiteHeader } from "./site-chrome";
 
 export type AccountMode = "login" | "register" | "forgot" | "reset" | "verify" | "link" | "reauth";
 const modes: AccountMode[] = ["login", "register", "forgot", "reset", "verify", "link", "reauth"];
 export function safeDestination(value: string | null): string {
   if (!value) return "/app";
   if (value.startsWith("?")) value = `/app${value}`;
-  if (!/^\/app(?:\?tab=(?:auctions|catalog|lists|battlefields|draft|live|result))?$/.test(value)) return "/app";
+  if (!/^\/app(?:\?tab=(?:auctions|catalog|lists|battlefields|draft|live|result|statistics))?$/.test(value)) return "/app";
   return value;
 }
 export function postLoginDestination(url: URL): string {
@@ -166,7 +168,7 @@ export function AccountScreen({ owner, mode, token, lang, onMode, identifier: em
     } finally { if (current === operation.current) setPending(false); }
   }
   return <main className="account-shell">
-    <a className="account-brand" href="/">2 Ordular savaşı</a>
+    <a className="account-brand" href="/" aria-label="2 Ordular savaşı"><img src="/logo.jpg" width={72} height={72} alt="" /></a>
     <section className="account-panel" aria-labelledby="account-title">
       <h1 id="account-title" ref={heading} tabIndex={-1}>{title}</h1>
       <p>{t(lang, "auth_intro")}</p>
@@ -182,20 +184,20 @@ export function AccountScreen({ owner, mode, token, lang, onMode, identifier: em
         <button className="primary" type="submit" disabled={disabled || ((mode === "link" || mode === "reauth") && !google)}>{pending ? t(lang, "auth_working") : title}</button>
       </form>}
       {(mode === "login" || mode === "register") && <>
-        {google ? <a className="account-google" href={authApi.googleStartUrl(returnTo)}>{t(lang, "auth_google")}</a> : <p className="account-note">{t(lang, "auth_googleUnavailable")}</p>}
+        {google ? <a className="account-google" href={authApi.googleStartUrl(returnTo)}><img src="/google-g.png" width={20} height={20} alt="" /><span>{t(lang, "auth_google")}</span></a> : <p className="account-note">{t(lang, "auth_googleUnavailable")}</p>}
         <nav className="account-links" aria-label={t(lang, "auth_account")}>
-          <button type="button" disabled={pending} onClick={() => onMode(mode === "login" ? "register" : "login")}>{t(lang, mode === "login" ? "auth_register" : "auth_login")}</button>
-          <button type="button" disabled={pending} onClick={() => onMode("forgot")}>{t(lang, "auth_forgot")}</button>
+          <button type="button" className="account-action" disabled={pending} onClick={() => onMode(mode === "login" ? "register" : "login")}><Icon name={mode === "login" ? "register" : "login"} /><span>{t(lang, mode === "login" ? "auth_register" : "auth_login")}</span></button>
+          <button type="button" className="account-action" disabled={pending} onClick={() => onMode("forgot")}><Icon name="key" /><span>{t(lang, "auth_forgot")}</span></button>
         </nav>
       </>}
       {(mode === "link" || mode === "reauth") && !google && <p role="status">{t(lang, "auth_googleUnavailable")}</p>}
-      {mode === "register" && mail && <button type="button" disabled={pending || !email} onClick={async () => {
+      {mode === "register" && mail && <button type="button" className="account-action account-resend" disabled={pending || !email} onClick={async () => {
         const current = ++operation.current; setPending(true); setError("");
         try { await authApi.resendVerification(email); if (current === operation.current) setMessage(t(lang, "auth_mailSent")); }
         catch { if (current === operation.current) setError(t(lang, "auth_serviceError")); }
         finally { if (current === operation.current) setPending(false); }
-      }}>{t(lang, "auth_resend")}</button>}
-      {!["login", "register"].includes(mode) && <button type="button" disabled={pending} onClick={() => onMode("login")}>{t(lang, "auth_login")}</button>}
+      }}><Icon name="mail" /><span>{t(lang, "auth_resend")}</span></button>}
+      {!["login", "register"].includes(mode) && <button type="button" className="account-action" disabled={pending} onClick={() => onMode("login")}><Icon name="login" /><span>{t(lang, "auth_login")}</span></button>}
       {mode === "forgot" && <p className="account-note">{t(lang, "auth_googleRecovery")}</p>}
     </section>
   </main>;
@@ -251,12 +253,12 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
       window.dispatchEvent(new PopStateEvent("popstate"));
     }
   }, [showWorkspace, account, route]);
-  return <>
-    <div className="account-toolbar">
-      <button type="button" onClick={() => { const next = lang === "tr" ? "en" : "tr"; setLang(next); setLanguage(next); document.documentElement.lang = next; }}>{lang === "tr" ? "English" : "Türkçe"}</button>
-      {state.view?.user && <><span>{state.view.user.username}</span><button type="button" onClick={() => navigate("link")}>{t(lang, "auth_link")}</button></>}
-      {(state.view?.user || state.blocked) && <button type="button" disabled={state.busy} onClick={() => { setError(false); void owner.logout().catch(() => setError(true)); }}>{t(lang, "auth_logout")}</button>}
-    </div>
+  return <div className="site-frame">
+    <SiteHeader lang={lang} user={state.view?.user ?? null} busy={state.busy} blocked={state.blocked}
+      onLanguage={() => { const next = lang === "tr" ? "en" : "tr"; setLang(next); setLanguage(next); document.documentElement.lang = next; }}
+      onLink={() => navigate("link")}
+      onLogout={() => { setError(false); void owner.logout().catch(() => setError(true)); }} />
+    <div className="site-content">
     {error && <p className="account-error" role="alert">{t(lang, state.blocked ? "auth_logoutError" : "auth_serviceError")}</p>}
     {publicRoot ? <LandingPage lang={lang} onStart={() => {
       const url = new URL(state.view?.user && !state.busy && !state.blocked ? "/app" : "/account", window.location.origin);
@@ -265,5 +267,7 @@ export function SessionBoundary({ children }: { children: (user: AuthUser) => Re
       {!state.view && <button type="button" onClick={() => { setError(false); void owner.run(async () => ({ ...await authApi.session(), user: null })).catch(() => setError(true)); }}>{t(lang, "auth_retry")}</button>}
       <AccountScreen key={mode} owner={owner} mode={!state.view?.user && (mode === "link" || mode === "reauth") ? "login" : mode} token={token} lang={lang} onMode={navigate} identifier={identifier} onIdentifierChange={setIdentifier} />
     </>}
-  </>;
+    </div>
+    <SiteFooter lang={lang} />
+  </div>;
 }

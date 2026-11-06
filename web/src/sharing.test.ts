@@ -148,6 +148,110 @@ it("takes one contextual private child from a public list into an existing owned
   expect(edit).not.toHaveBeenCalled();
 });
 
+it("shows the shared source on the left and switches the target editor on the right", async () => {
+  const first: CandidateList = { ...owner, id: "first", name: "First", isDraft: false, entries: [owned.id] };
+  const second: CandidateList = { ...first, id: "second", name: "Second", entries: [foreign.id] };
+  const source: CandidateList = { ...foreign, id: "source", name: "Source", isDraft: false, entries: [foreign.id] };
+  vi.spyOn(api, "lists").mockImplementation(async publicRecords => publicRecords ? [first, second, source] : [first, second]);
+  const reorder = vi.spyOn(api, "reorder").mockResolvedValue(second);
+  const remove = vi.spyOn(api, "removeEntry").mockResolvedValue({ ...second, entries: [] });
+  const edit = vi.spyOn(api, "editListEntry").mockResolvedValue({ candidate: foreign, list: second });
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => callback());
+  const render = mount(() => Lists({ lang: "en", userId: "alice", candidates: [owned, foreign], onCandidates: update, onError: error }));
+  render(); await settle(); toggle(render(), true); render(); await settle();
+  const sourceCard = elements(render()).find(el => el.props.className === "list-entry" && renderToStaticMarkup(el).includes("Source"))!;
+  click(button(sourceCard, t("en", "selectList")));
+  const columns = () => {
+    const split = elements(render()).find(el => el.props.className === "split")!;
+    return Children.toArray(split.props.children as ReactNode).filter(isValidElement);
+  };
+  expect(columns()).toHaveLength(2);
+  expect(elements(columns()[0]).some(el => el.type === "select")).toBe(false);
+  let picker = elements(columns()[1]).find(el => el.type === "select")!;
+  expect(picker.props.value).toBe("first");
+  const editor = () => elements(columns()[1]).find(el => el.props.context && el.props.entries)!;
+  expect(editor().props.entries).toEqual([owned.id]);
+  (picker.props.onChange as (e: unknown) => void)({ target: { value: "second" } });
+  expect(editor().props.entries).toEqual([foreign.id]);
+  expect(editor().props.context).toEqual({ listId: "second" });
+  await (editor().props.onReorder as (id: string, to: number) => Promise<void>)(foreign.id, 0);
+  expect(reorder).toHaveBeenCalledWith("second", foreign.id, 0);
+  (editor().props.onEdit as (id: string) => void)(foreign.id);
+  const dialog = elements(render()).find(el => el.props.previewUrl)!;
+  expect(dialog.props.previewUrl).toContain("listId=second");
+  await (dialog.props.onSave as (name: string, file: null) => Promise<void>)("Edited", null);
+  expect(edit).toHaveBeenCalledWith("second", foreign.id, "Edited", null);
+  await (editor().props.onRemove as (id: string) => Promise<void>)(foreign.id);
+  expect(remove).toHaveBeenCalledWith("second", foreign.id);
+  expect(editor().props.entries).toEqual([]);
+  click(button(columns()[1], t("en", "createAndAdd")));
+  picker = elements(columns()[1]).find(el => el.type === "select")!;
+  (picker.props.onChange as (e: unknown) => void)({ target: { value: "first" } });
+  expect(elements(render()).some(el => el.type === "dialog")).toBe(false);
+});
+
+it("creates candidates in the selected target even if the target changes during creation", async () => {
+  const first: CandidateList = { ...owner, id: "first", name: "First", isDraft: false, entries: [] };
+  const second: CandidateList = { ...first, id: "second", name: "Second" };
+  const source: CandidateList = { ...foreign, id: "source", name: "Source", isDraft: false, entries: [] };
+  vi.spyOn(api, "lists").mockImplementation(async publicRecords => publicRecords ? [first, second, source] : [first, second]);
+  let finish!: (candidate: Candidate) => void;
+  vi.spyOn(api, "createCandidate").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const add = vi.spyOn(api, "addEntry").mockResolvedValue({ ...second, entries: [owned.id] });
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => callback());
+  const render = mount(() => Lists({ lang: "en", userId: "alice", candidates: [], onCandidates: update, onError: error }));
+  render(); await settle(); toggle(render(), true); render(); await settle();
+  click(button(elements(render()).find(el => el.props.className === "list-entry" && renderToStaticMarkup(el).includes("Source")), t("en", "selectList")));
+  const selectTarget = (value: string) => (elements(render()).find(el => el.type === "select")!.props.onChange as (e: unknown) => void)({ target: { value } });
+  selectTarget("second");
+  expect(button(render(), t("en", "createAndAdd"))).toBeDefined();
+  click(button(render(), t("en", "createAndAdd")));
+  (elements(render()).find(el => el.type === "input" && el.props["aria-label"] === t("en", "name"))!.props.onChange as (e: unknown) => void)({ target: { value: "New candidate" } });
+  (elements(render()).find(el => el.props.onSelect)!.props.onSelect as (file: File) => void)(new File(["image"], "test.png"));
+  (elements(render()).find(el => el.type === "form")!.props.onSubmit as (e: unknown) => void)({ preventDefault() {} });
+  selectTarget("first");
+  finish(owned); await settle();
+  expect(add).toHaveBeenCalledWith("second", owned.id);
+  expect(elements(render()).find(el => el.props.readOnly === true)!.props.context).toEqual({ listId: "source" });
+});
+
+it("clears the shared selection, scrolls to the heading, and can reopen it", async () => {
+  const source: CandidateList = { ...foreign, id: "source", name: "Source", isDraft: false, entries: [] };
+  vi.spyOn(api, "lists").mockResolvedValue([source]);
+  vi.stubGlobal("requestAnimationFrame", (callback: () => void) => callback());
+  const render = mount(() => Lists({ lang: "tr", userId: "alice", candidates: [], onCandidates: update, onError: error }));
+  render(); await settle();
+  let tree = render();
+  const close = elements(tree).find(el => el.type === "button" && el.props.title === "Seçimi kaldır");
+  expect(close).toBeDefined();
+  expect(close!.props["aria-label"]).toBe("Seçimi kaldır");
+  const scrollIntoView = vi.fn();
+  const heading = elements(tree).find(el => el.props.title === t("tr", "lists") && typeof el.type === "function")!;
+  (heading.props.headingRef as { current: unknown }).current = { scrollIntoView };
+  click(close!);
+  expect(elements(render()).some(el => el.props.className === "split")).toBe(false);
+  expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  toggle(render(), true); render(); await settle();
+  expect(elements(render()).some(el => el.props.className === "split")).toBe(false);
+  click(button(render(), t("tr", "selectList")));
+  tree = render();
+  expect(elements(tree).some(el => el.props.className === "split")).toBe(true);
+  expect(elements(tree).find(el => el.type === "select")!.props.disabled).toBe(true);
+  expect(button(tree, t("tr", "createAndAdd"))).toBeUndefined();
+});
+
+it.each([false, true])("preserves the owned list editor when isPublic=%s", async isPublic => {
+  const list: CandidateList = { ...owner, id: "own-list", name: "Own list", isPublic, isDraft: true, entries: [owned.id] };
+  vi.spyOn(api, "lists").mockResolvedValue([list]);
+  const render = mount(() => Lists({ lang: "en", userId: "alice", candidates: [owned], onCandidates: update, onError: error }));
+  render(); await settle();
+  const tree = render();
+  expect(elements(tree).find(el => el.type === CatalogPane)!.props.addedIds).toEqual([owned.id]);
+  expect(elements(tree).some(el => el.type === "select")).toBe(false);
+  expect(button(tree, t("en", "createAndAdd"))).toBeDefined();
+  expect(elements(tree).find(el => el.props.context && el.props.entries)!.props.context).toEqual({ listId: list.id });
+});
+
 it("picker state is independent, public data remains discoverable with an empty own catalog, and disabling hides it immediately", async () => {
   const requests = vi.spyOn(api, "candidates").mockImplementation(async includePublic => includePublic ? [foreign] : []);
   const props = { lang: "en" as const, userId: "alice", candidates: [], addedIds: [], onAdd: update, onEdit: update };

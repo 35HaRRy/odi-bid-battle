@@ -1,5 +1,7 @@
 import { isFileTooLarge, isJsonTooLarge } from "./limits";
 import { API_BASE as BASE, ApiError, apiRequest } from "./api-transport";
+import type { AuctionStatistics, StatisticsOverview } from "../../api/src/statistics-types";
+export type { AuctionStatistics, StatisticsOverview } from "../../api/src/statistics-types";
 export { ApiError, apiRequest, setSessionCsrf, subscribeUnauthorized } from "./api-transport";
 
 function assertFileBudget(file: File | null | undefined): void {
@@ -187,6 +189,12 @@ function candidatePath(id: string, image: boolean, context?: CandidateContext): 
 
 export const api = {
   base: BASE,
+  async statistics(): Promise<StatisticsOverview> {
+    return (await apiRequest("/statistics")).json();
+  },
+  async auctionStatistics(id: string): Promise<AuctionStatistics> {
+    return (await apiRequest(`/statistics/auctions/${encodeURIComponent(id)}`)).json();
+  },
   imageUrl: (id: string, context?: CandidateContext) => `${BASE}${candidatePath(id, true, context)}`,
   bumpCandidateImage: (id: string) => {
     candidateImageRevs[id] = (candidateImageRevs[id] ?? 0) + 1;

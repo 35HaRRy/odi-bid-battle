@@ -17,6 +17,12 @@ importers:
       multer:
         specifier: ^1.4.5-lts.1
         version: 1.4.5-lts.2
+      nodemailer:
+        specifier: ^10.3.1
+        version: 10.3.1
+      openid-client:
+        specifier: ^6.8.9
+        version: 6.8.9
       pg:
         specifier: ^8.13.1
         version: 8.23.0
@@ -36,6 +42,9 @@ importers:
       '@types/node':
         specifier: ^22.9.0
         version: 22.20.1
+      '@types/nodemailer':
+        specifier: ^8.0.2
+        version: 8.0.2
       '@types/pg':
         specifier: ^8.11.0
         version: 8.23.1
@@ -523,6 +532,9 @@ packages:
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
+  '@types/nodemailer@8.0.2':
+    resolution: {integrity: sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==}
+
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
 
@@ -786,6 +798,9 @@ packages:
   isarray@1.0.0:
     resolution: {integrity: sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ==}
 
+  jose@6.2.15:
+    resolution: {integrity: sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==}
+
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
 
@@ -847,6 +862,13 @@ packages:
     resolution: {integrity: sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg==}
     engines: {node: '>= 0.6'}
 
+  nodemailer@10.3.1:
+    resolution: {integrity: sha512-uF0AFsJC07Y1vdW7p580DKAnh7rAO+4UPSSB3mDCPNDufoiaOebV6JmrzpxB14OjEEEiBsNdYoM2Y+fN8M7BBA==}
+    engines: {node: '>=20.0.0'}
+
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
+
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
     engines: {node: '>=0.10.0'}
@@ -858,6 +880,9 @@ packages:
   on-finished@2.4.1:
     resolution: {integrity: sha512-oVlzkg3ENAhCk2zdv7IJwd/QUD4z2RxRwpkcGY8psCVcCYZNq4wYnVWALHM+brtuJjePWiYF/ClmuDr8Ch5+kg==}
     engines: {node: '>= 0.8'}
+
+  openid-client@6.8.9:
+    resolution: {integrity: sha512-6mXMRNJxDOf6BflEWLXul1UwzLFz++9Ofz1PYwPwwsJsyXBsbfkO+Jo255SW1qnFNLYz4EJWHz42X4OJJrya/g==}
 
   parseurl@1.3.3:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
@@ -1426,6 +1451,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@8.0.2':
+    dependencies:
+      '@types/node': 22.20.1
+
   '@types/pg@8.23.1':
     dependencies:
       '@types/node': 22.20.1
@@ -1773,6 +1802,8 @@ snapshots:
 
   isarray@1.0.0: {}
 
+  jose@6.2.15: {}
+
   loupe@3.2.1: {}
 
   magic-string@0.30.21:
@@ -1819,6 +1850,10 @@ snapshots:
 
   negotiator@0.6.3: {}
 
+  nodemailer@10.3.1: {}
+
+  oauth4webapi@3.8.8: {}
+
   object-assign@4.1.1: {}
 
   object-inspect@1.13.4: {}
@@ -1826,6 +1861,11 @@ snapshots:
   on-finished@2.4.1:
     dependencies:
       ee-first: 1.1.1
+
+  openid-client@6.8.9:
+    dependencies:
+      jose: 6.2.15
+      oauth4webapi: 3.8.8
 
   parseurl@1.3.3: {}
 

@@ -99,6 +99,22 @@ export function buildApp(store: PgStore, options: AppOptions = {}): express.Expr
   mountTeamRoutes(app);
   mountLiveRoutes(app);
 
+  app.get("/statistics", async (_req, res) => {
+    try { res.json(await requestStore(res).getStatistics()); }
+    catch (err) {
+      const h = toHttp(err);
+      res.status(h.status).json({ error: h.body });
+    }
+  });
+
+  app.get("/statistics/auctions/:id", async (req, res) => {
+    try { res.json(await requestStore(res).getAuctionStatistics(req.params.id)); }
+    catch (err) {
+      const h = toHttp(err);
+      res.status(h.status).json({ error: h.body });
+    }
+  });
+
   app.post("/candidates", uploadSingle("image"), async (req, res) => {
     try {
       const name = String(req.body?.name ?? "");

@@ -57,6 +57,18 @@ describe("account routes", () => {
     expect(login).toContain('autoComplete="username"');
     expect(login).toContain("Google sign-in is unavailable");
   });
+  it("uses logo branding, an official Google mark and compact icon account actions", async () => {
+    const owner = new SessionOwner();
+    await owner.run(async () => ({ ...view(null), googleEnabled: true, mailEnabled: true }));
+    const tree = createElement(AccountScreen, { owner, mode: "register", token: "", lang: "tr", onMode: () => {}, identifier: "", onIdentifierChange: () => {} });
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('src="/logo.jpg"');
+    expect(html).toMatch(/class="account-google"[^>]*href="[^"]*\/auth\/google\/start\?/);
+    expect(html).toContain('src="/google-g.png"');
+    for (const label of ["Giriş yap", "Şifremi unuttum", "Doğrulama bağlantısını yeniden gönder"]) {
+      expect(html).toMatch(new RegExp(`<button[^>]*class="[^"]*account-action[^\"]*"[^>]*><svg[^>]*aria-hidden="true"[^>]*>.*?</svg><span>${label}</span></button>`));
+    }
+  });
 });
 describe("session ownership", () => {
   it.each(["login", "register", "reset"] as const)("%s accepts 65 non-BMP password characters without native truncation and rejects 129 code points", async mode => {

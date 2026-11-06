@@ -4,6 +4,7 @@ import { AssetError, validateAssetImage } from "./battlefield-domain.js";
 import { BattlefieldStore } from "./battlefield-store.js";
 import { isLiveError, LiveStore } from "./live-store.js";
 import { TeamStore } from "./team-store.js";
+import { readStatistics, readAuctionStatistics } from "./statistics-store.js";
 import { AccessError, assertOwnedAuction, visibility, type Visibility, type CandidateContext } from "./access.js";
 import {
   buildListCopyName,
@@ -241,6 +242,16 @@ export class PgStore {
 
   async close(): Promise<void> {
     await this.pool?.end?.().catch(() => undefined);
+  }
+
+  async getStatistics() {
+    try { return await readStatistics(this.q, this.userId); }
+    catch (err) { throw pgError("failed to read statistics", err); }
+  }
+
+  async getAuctionStatistics(id: string) {
+    try { return await readAuctionStatistics(this.q, this.userId, id); }
+    catch (err) { throw pgError("failed to read auction statistics", err); }
   }
 
   private async lockList(client: PoolClient, id: string): Promise<void> {

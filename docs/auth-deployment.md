@@ -4,6 +4,14 @@ Deploy identity, ownership/API gate, UI and migration together in a maintenance 
 
 ## Configuration (standalone and Vercel)
 
+### Local development upgrades
+
+`pnpm dev` starts PostgreSQL and the API/web processes. Docker's schema initialization runs only when the database is first created: an existing `db/data` volume is **not** upgraded by restarting Docker. Before running a newer account-enabled API against the older Compose database, back it up, then run `pnpm db:migrate` from the repository root. This command targets Compose's `bidbattle` database, not a custom `DATABASE_URL`; for a custom target, apply `db/schema.sql` using that target's approved connection. The existing transactional schema preserves legacy records. Legacy content retains its reserved disabled owner; registering a new account does not claim it. Never delete `db/data` to fix missing tables.
+
+The standalone API's development command loads `api/.env`. Keep `APP_URL` and `ALLOWED_ORIGIN` aligned with the actual frontend URL (normally `http://localhost:5173`). Complete SMTP/Google settings advertise configured capabilities, not provider health. A successful `/health` or `/auth/session` alone does not prove the authentication schema exists.
+
+If registration fails after migration, verify the SMTP connection/authentication privately. Nodemailer `EAUTH` with SMTP `535` means the provider rejected authentication: correct `SMTP_USER`/`SMTP_PASS` and provider requirements (for example, a provider-issued app password). Do not print these values or bypass email verification. Restart the API after changing `api/.env`. Google login must return a 302 from `/auth/google/start` before testing consent/callback with an approved Google test account.
+
 - Node 24; existing PostgreSQL pool. `DATABASE_URL` is injected privately, never printed.
 - `APP_URL`: fixed frontend origin, e.g. `https://app.example.test`. Links always target `/account/verify-email#token=…` or `/account/reset-password#token=…`; never request Host. The UI immediately removes fragments from browser history and submits tokens via POST. Preserve `Referrer-Policy: no-referrer` on account/token pages in frontend hosting headers. Never log request bodies, cookies, token fragments or links. API responses already set no-referrer and no-store.
 - `ALLOWED_ORIGIN`: exactly one frontend origin, no trailing slash/path. Both URLs are mandatory and HTTPS-only with `NODE_ENV=production`. Development defaults to `http://localhost:5173`; credentials-enabled CORS permits only this configured origin. The production frontend/API must be same-site (prefer same origin `/api`); SameSite=Lax does not support cross-site cookie deployment.
